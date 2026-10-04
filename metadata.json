@@ -1,0 +1,1 @@
+{"name":"SafeRoute Android","description":"Android mobile navigation and real-time area safety intelligence prototype powered by Google Maps Platform and Gemini Search Grounding.","requestFramePermissions":["geolocation"],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}
