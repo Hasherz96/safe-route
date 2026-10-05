@@ -54,6 +54,51 @@ const QUICK_SEARCH_QUERIES = ENABLE_SRI_LANKA_PROTOTYPE
   ? SRI_LANKA_QUICK_SEARCH_PRESETS
   : GLOBAL_QUICK_SEARCH_QUERIES;
 
+const PREDEFINED_LOCATIONS: { [key: string]: { lat: number; lng: number; name: string; address: string } } = {
+  'pettah': { lat: 6.9344, lng: 79.8528, name: 'Pettah, Colombo', address: 'Pettah, Colombo 01100, Sri Lanka' },
+  'dehiwala': { lat: 6.8511, lng: 79.8660, name: 'Dehiwala, Colombo', address: 'Dehiwala-Mount Lavinia, Sri Lanka' },
+  'bambalapitiya': { lat: 6.8920, lng: 79.8552, name: 'Bambalapitiya, Colombo', address: 'Bambalapitiya, Colombo 00400, Sri Lanka' },
+  'fort': { lat: 6.9342, lng: 79.8503, name: 'Colombo Fort Railway Station', address: 'Colombo Fort Railway Station, Olcott Mawatha, Colombo, Sri Lanka' },
+  'kandy': { lat: 7.2906, lng: 80.6337, name: 'Kandy City Centre', address: 'Kandy City Centre, Sri Dalada Veediya, Kandy, Sri Lanka' },
+  'galle': { lat: 6.0268, lng: 80.2170, name: 'Galle Fort', address: 'Galle Fort, Galle, Sri Lanka' },
+  'colombo': { lat: 6.9271, lng: 79.8612, name: 'Colombo', address: 'Colombo, Western Province, Sri Lanka' },
+  'union square': { lat: 37.7879, lng: -122.4074, name: 'Union Square', address: 'Union Square, San Francisco, CA, USA' },
+  'times square': { lat: 40.7580, lng: -73.9855, name: 'Times Square', address: 'Times Square, New York, NY, USA' },
+  'millennium park': { lat: 41.8826, lng: -87.6226, name: 'Millennium Park', address: 'Millennium Park, Chicago, IL, USA' },
+  'pike place': { lat: 47.6097, lng: -122.3422, name: 'Pike Place Market', address: 'Pike Place Market, Seattle, WA, USA' },
+};
+
+function lookupPredefinedLocation(queryText: string): PlaceSelection | null {
+  const lower = queryText.toLowerCase().trim();
+  for (const [key, val] of Object.entries(PREDEFINED_LOCATIONS)) {
+    if (lower.includes(key)) {
+      return {
+        name: val.name,
+        address: val.address,
+        location: { lat: val.lat, lng: val.lng },
+        placeId: `predef-${key}`,
+      };
+    }
+  }
+
+  // Fallback Sri Lanka center if prototype mode active
+  if (ENABLE_SRI_LANKA_PROTOTYPE) {
+    return {
+      name: queryText.split(',')[0].trim(),
+      address: `${queryText}, Sri Lanka`,
+      location: { lat: 6.9344, lng: 79.8528 },
+      placeId: `fallback-lk-${Date.now()}`,
+    };
+  }
+
+  return {
+    name: queryText.split(',')[0].trim(),
+    address: queryText,
+    location: { lat: 37.7879, lng: -122.4074 },
+    placeId: `fallback-global-${Date.now()}`,
+  };
+}
+
 export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
   origin,
   destination,
@@ -106,51 +151,78 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
 
   const fetchPredictions = useCallback(
     async (inputText: string) => {
-      if (!placesLib || inputText.trim().length < 2) {
+      if (inputText.trim().length < 2) {
         setSuggestions([]);
-        return;
-      }
-
-      const AutocompleteSuggestion = (placesLib as any).AutocompleteSuggestion;
-      if (
-        !AutocompleteSuggestion ||
-        typeof AutocompleteSuggestion.fetchAutocompleteSuggestions !== 'function'
-      ) {
         return;
       }
 
       setIsFetchingSuggestions(true);
       try {
-        const sessionToken = ensureSessionToken();
-        const request: any = {
-          input: inputText.trim(),
-          ...(ENABLE_SRI_LANKA_PROTOTYPE ? { region: 'lk' } : {}),
-        };
-        if (sessionToken) {
-          request.sessionToken = sessionToken;
+        const AutocompleteSuggestion = (placesLib as any)?.AutocompleteSuggestion;
+        if (
+          AutocompleteSuggestion &&
+          typeof AutocompleteSuggestion.fetchAutocompleteSuggestions === 'function'
+        ) {
+          const sessionToken = ensureSessionToken();
+          const request: any = {
+            input: inputText.trim(),
+            ...(ENABLE_SRI_LANKA_PROTOTYPE ? { region: 'lk' } : {}),
+          };
+          if (sessionToken) {
+            request.sessionToken = sessionToken;
+          }
+
+          const response =
+            await AutocompleteSuggestion.fetchAutocompleteSuggestions(request);
+          const list = response?.suggestions || [];
+
+          const mapped: SuggestionEntry[] = list
+            .slice(0, 5)
+            .map((item: any, idx: number) => {
+              const pred = item.placePrediction;
+              return {
+                placeId: pred?.placeId || `pred-${idx}`,
+                mainText:
+                  pred?.mainText?.text ||
+                  pred?.text?.text ||
+                  inputText.trim(),
+                secondaryText: pred?.secondaryText?.text || '',
+                placePrediction: pred,
+              };
+            })
+            .filter((item: SuggestionEntry) => Boolean(item.placePrediction));
+
+          setSuggestions(mapped);
+          return;
         }
 
-        const response =
-          await AutocompleteSuggestion.fetchAutocompleteSuggestions(request);
-        const list = response?.suggestions || [];
-
-        const mapped: SuggestionEntry[] = list
-          .slice(0, 5)
-          .map((item: any, idx: number) => {
-            const pred = item.placePrediction;
-            return {
-              placeId: pred?.placeId || `pred-${idx}`,
-              mainText:
-                pred?.mainText?.text ||
-                pred?.text?.text ||
-                inputText.trim(),
-              secondaryText: pred?.secondaryText?.text || '',
-              placePrediction: pred,
-            };
-          })
-          .filter((item: SuggestionEntry) => Boolean(item.placePrediction));
-
-        setSuggestions(mapped);
+        // Fallback: Legacy AutocompleteService
+        if (window.google?.maps?.places?.AutocompleteService) {
+          const service = new window.google.maps.places.AutocompleteService();
+          service.getPlacePredictions(
+            {
+              input: inputText.trim(),
+              ...(ENABLE_SRI_LANKA_PROTOTYPE ? { componentRestrictions: { country: 'lk' } } : {}),
+            },
+            (predictions, status) => {
+              if (
+                status === window.google.maps.places.PlacesServiceStatus.OK &&
+                predictions
+              ) {
+                setSuggestions(
+                  predictions.slice(0, 5).map((p) => ({
+                    placeId: p.place_id,
+                    mainText: p.structured_formatting?.main_text || p.description,
+                    secondaryText: p.structured_formatting?.secondary_text || '',
+                    placePrediction: null,
+                  }))
+                );
+              } else {
+                setSuggestions([]);
+              }
+            }
+          );
+        }
       } catch (err: any) {
         const msg = String(err?.message || err || '');
         if (
@@ -189,40 +261,98 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
     }, 220);
   };
 
+  const resolveQueryToPlace = useCallback(
+    async (queryText: string): Promise<PlaceSelection> => {
+      // 1. Try Google Maps Geocoder API
+      if (window.google?.maps?.Geocoder) {
+        try {
+          const geocoder = new window.google.maps.Geocoder();
+          const geocodeRes = await new Promise<any>((resolve) => {
+            geocoder.geocode(
+              {
+                address: queryText,
+                ...(ENABLE_SRI_LANKA_PROTOTYPE ? { componentRestrictions: { country: 'LK' } } : {}),
+              },
+              (results, status) => {
+                if (status === 'OK' && results?.[0]?.geometry?.location) {
+                  resolve(results[0]);
+                } else {
+                  resolve(null);
+                }
+              }
+            );
+          });
+
+          if (geocodeRes) {
+            const loc = geocodeRes.geometry.location;
+            const lat = typeof loc.lat === 'function' ? loc.lat() : loc.lat;
+            const lng = typeof loc.lng === 'function' ? loc.lng() : loc.lng;
+            if (typeof lat === 'number' && typeof lng === 'number') {
+              return {
+                name: queryText.split(',')[0].trim(),
+                address: geocodeRes.formatted_address || queryText,
+                location: { lat, lng },
+                placeId: geocodeRes.place_id,
+              };
+            }
+          }
+        } catch {
+          // Ignore geocoder error, fall through
+        }
+      }
+
+      // 2. Predefined location lookup
+      const predef = lookupPredefinedLocation(queryText);
+      return predef;
+    },
+    []
+  );
+
   const resolvePlacePrediction = useCallback(
     async (
       entry: SuggestionEntry,
       targetField: 'destination' | 'origin'
     ) => {
-      if (!entry.placePrediction) return;
       try {
-        const place = entry.placePrediction.toPlace();
-        await place.fetchFields({
-          fields: ['displayName', 'formattedAddress', 'location', 'viewport'],
-        });
+        if (entry.placePrediction) {
+          const place = entry.placePrediction.toPlace();
+          await place.fetchFields({
+            fields: ['displayName', 'formattedAddress', 'location', 'viewport'],
+          });
 
-        // Reset session token after completing a place selection session
-        sessionTokenRef.current = null;
+          sessionTokenRef.current = null;
 
-        const loc = place.location;
-        const lat = typeof loc?.lat === 'function' ? loc.lat() : loc?.lat;
-        const lng = typeof loc?.lng === 'function' ? loc.lng() : loc?.lng;
+          const loc = place.location;
+          const lat = typeof loc?.lat === 'function' ? loc.lat() : loc?.lat;
+          const lng = typeof loc?.lng === 'function' ? loc.lng() : loc?.lng;
 
-        if (typeof lat === 'number' && typeof lng === 'number') {
-          const resolved: PlaceSelection = {
-            name: place.displayName || entry.mainText,
-            address: place.formattedAddress || entry.secondaryText || entry.mainText,
-            location: { lat, lng },
-            placeId: entry.placeId,
-          };
+          if (typeof lat === 'number' && typeof lng === 'number') {
+            const resolved: PlaceSelection = {
+              name: place.displayName || entry.mainText,
+              address: place.formattedAddress || entry.secondaryText || entry.mainText,
+              location: { lat, lng },
+              placeId: entry.placeId,
+            };
 
-          if (targetField === 'destination') {
-            setDestQuery(resolved.name);
-            onSelectDestination(resolved);
-          } else {
-            setOriginQuery(resolved.name);
-            onSelectOrigin(resolved);
+            if (targetField === 'destination') {
+              setDestQuery(resolved.name);
+              onSelectDestination(resolved);
+            } else {
+              setOriginQuery(resolved.name);
+              onSelectOrigin(resolved);
+            }
+            return;
           }
+        }
+
+        // Fallback resolution by query string
+        const fallbackResolved = await resolveQueryToPlace(entry.mainText);
+        if (targetField === 'destination') {
+          setDestQuery(fallbackResolved.name);
+          onSelectDestination(fallbackResolved);
+        } else {
+          setOriginQuery(fallbackResolved.name);
+          onSelectOrigin(fallbackResolved);
         }
       } catch (err: any) {
         const msg = String(err?.message || err || '');
@@ -235,22 +365,30 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
           onQuotaExceeded();
         }
         console.error('Place fetchFields error:', err);
+        // Fallback resolve
+        const fallbackResolved = await resolveQueryToPlace(entry.mainText);
+        if (targetField === 'destination') {
+          setDestQuery(fallbackResolved.name);
+          onSelectDestination(fallbackResolved);
+        } else {
+          setOriginQuery(fallbackResolved.name);
+          onSelectOrigin(fallbackResolved);
+        }
       } finally {
         setSuggestions([]);
         setActiveField(null);
       }
     },
-    [onSelectDestination, onSelectOrigin, onQuotaExceeded]
+    [onSelectDestination, onSelectOrigin, onQuotaExceeded, resolveQueryToPlace]
   );
 
-  // Trigger a live Places API lookup for one of the quick search buttons
-  const handleQuickQuery = useCallback(
-    async (queryText: string) => {
-      if (!placesLib) return;
-      setDestQuery(queryText);
+  const handleExecuteSearch = useCallback(
+    async (queryText: string, targetField: 'destination' | 'origin') => {
+      if (!queryText.trim()) return;
       setIsFetchingSuggestions(true);
       try {
-        const AutocompleteSuggestion = (placesLib as any).AutocompleteSuggestion;
+        // Try live Places Autocomplete prediction first if available
+        const AutocompleteSuggestion = (placesLib as any)?.AutocompleteSuggestion;
         if (
           AutocompleteSuggestion &&
           typeof AutocompleteSuggestion.fetchAutocompleteSuggestions === 'function'
@@ -258,7 +396,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
           const sessionToken = ensureSessionToken();
           const res =
             await AutocompleteSuggestion.fetchAutocompleteSuggestions({
-              input: queryText,
+              input: queryText.trim(),
               ...(ENABLE_SRI_LANKA_PROTOTYPE ? { region: 'lk' } : {}),
               ...(sessionToken ? { sessionToken } : {}),
             });
@@ -271,32 +409,53 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
                 secondaryText: first.secondaryText?.text || '',
                 placePrediction: first,
               },
-              'destination'
+              targetField
             );
+            return;
           }
         }
-      } catch (err: any) {
-        const msg = String(err?.message || err || '');
-        if (
-          msg.includes('429') ||
-          msg.includes('RESOURCE_EXHAUSTED') ||
-          msg.includes('OVER_QUERY_LIMIT') ||
-          msg.includes('Quota')
-        ) {
-          onQuotaExceeded();
+
+        // Direct geocode / predefined location resolution
+        const resolved = await resolveQueryToPlace(queryText);
+        if (targetField === 'destination') {
+          setDestQuery(resolved.name);
+          onSelectDestination(resolved);
+        } else {
+          setOriginQuery(resolved.name);
+          onSelectOrigin(resolved);
         }
-        console.error('Quick query error:', err);
+      } catch (err: any) {
+        console.error('Execute search error:', err);
+        const resolved = await resolveQueryToPlace(queryText);
+        if (targetField === 'destination') {
+          setDestQuery(resolved.name);
+          onSelectDestination(resolved);
+        } else {
+          setOriginQuery(resolved.name);
+          onSelectOrigin(resolved);
+        }
       } finally {
         setIsFetchingSuggestions(false);
+        setSuggestions([]);
+        setActiveField(null);
       }
     },
-    [placesLib, ensureSessionToken, resolvePlacePrediction, onQuotaExceeded]
+    [placesLib, ensureSessionToken, resolvePlacePrediction, resolveQueryToPlace, onSelectDestination, onSelectOrigin]
   );
 
-  // Auto-load initial destination via live Places API (New) once placesLib is ready
+  // Trigger a live lookup for one of the quick search preset buttons
+  const handleQuickQuery = useCallback(
+    (queryText: string) => {
+      setDestQuery(queryText);
+      handleExecuteSearch(queryText, 'destination');
+    },
+    [handleExecuteSearch]
+  );
+
+  // Auto-load initial destination upon load
   const didInitRef = useRef(false);
   useEffect(() => {
-    if (placesLib && !destination && !didInitRef.current) {
+    if (!destination && !didInitRef.current) {
       didInitRef.current = true;
       handleQuickQuery(
         ENABLE_SRI_LANKA_PROTOTYPE
@@ -304,7 +463,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
           : 'Union Square San Francisco CA'
       );
     }
-  }, [placesLib, destination, handleQuickQuery]);
+  }, [destination, handleQuickQuery]);
 
   const travelModes: { id: TravelModeOption; label: string; icon: React.ReactNode }[] = [
     { id: 'WALKING', label: 'Walk', icon: <Footprints className="w-3.5 h-3.5" /> },
@@ -317,15 +476,33 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
     <div className="absolute top-3 left-3 right-3 z-30 flex flex-col gap-2 pointer-events-none">
       {/* Main Material Floating Search Card */}
       <div className="pointer-events-auto rounded-2xl bg-slate-900/95 backdrop-blur-md border border-slate-800/90 shadow-2xl p-2.5 transition-all">
-        {/* Destination Search Row */}
-        <div className="flex items-center gap-1.5">
+        {/* Destination Search Form Row */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleExecuteSearch(destQuery, 'destination');
+          }}
+          className="flex items-center gap-1.5"
+        >
           <div className="relative flex-1 flex items-center bg-slate-950/90 border border-slate-800 rounded-xl px-3 min-h-[44px] focus-within:border-emerald-500/70 transition-colors">
-            <Search className="w-4 h-4 text-slate-400 shrink-0 mr-2.5" />
+            <button
+              type="submit"
+              title="Search location"
+              className="text-slate-400 hover:text-emerald-400 shrink-0 mr-2.5 cursor-pointer"
+            >
+              <Search className="w-4 h-4" />
+            </button>
             <input
               type="text"
               value={destQuery}
               onFocus={() => setActiveField('destination')}
               onChange={(e) => handleInputChange(e.target.value, 'destination')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleExecuteSearch(destQuery, 'destination');
+                }
+              }}
               placeholder={
                 ENABLE_SRI_LANKA_PROTOTYPE
                   ? 'Search Sri Lanka place or street (200m scan)...'
@@ -387,12 +564,18 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
             <Route className="w-4 h-4" />
             <span className="hidden sm:inline">Directions</span>
           </button>
-        </div>
+        </form>
 
         {/* Expanded Origin & Travel Mode Drawer when Directions Enabled */}
         {directionsEnabled && (
           <div className="mt-2 pt-2 border-t border-slate-800/80 flex flex-col gap-2">
-            <div className="flex items-center gap-1.5">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleExecuteSearch(originQuery, 'origin');
+              }}
+              className="flex items-center gap-1.5"
+            >
               <div className="relative flex-1 flex items-center bg-slate-950/90 border border-slate-800 rounded-xl px-3 min-h-[44px] focus-within:border-sky-500/70 transition-colors">
                 <LocateFixed className="w-3.5 h-3.5 text-sky-400 shrink-0 mr-2.5" />
                 <input
@@ -400,6 +583,12 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
                   value={originQuery}
                   onFocus={() => setActiveField('origin')}
                   onChange={(e) => handleInputChange(e.target.value, 'origin')}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleExecuteSearch(originQuery, 'origin');
+                    }
+                  }}
                   placeholder="Start location (or tap GPS icon)..."
                   className="w-full bg-transparent text-xs text-slate-100 placeholder-slate-500 focus:outline-none truncate"
                   aria-label="Starting location"
@@ -427,7 +616,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
               >
                 Close
               </button>
-            </div>
+            </form>
 
             {/* Segmented Travel Mode Selector (Interactive Filter Controls) */}
             <div className="grid grid-cols-4 gap-1 p-1 bg-slate-950/90 rounded-xl border border-slate-800/80">
@@ -508,3 +697,4 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
     </div>
   );
 };
+

@@ -13,6 +13,7 @@
 
 import {
   SRI_LANKA_NATIONAL_OUTLETS,
+  SRI_LANKA_LOCALITY_TRANSLITERATIONS,
   type NationalNewsOutlet,
 } from './sriLankaConfig';
 
@@ -44,9 +45,135 @@ export function matchSriLankaNationalOutlet(
 }
 
 /**
+ * Fetches RSS items directly from designated Sri Lanka national news outlet RSS endpoints.
+ * Solves the issue where Google News RSS search fails to index local neighborhood articles.
+ */
+export async function fetchDirectSriLankaRssFeeds(): Promise<
+  { title: string; pubDate: string; sourceName: string; link: string }[]
+> {
+  const results: { title: string; pubDate: string; sourceName: string; link: string }[] = [];
+
+  const fetchPromises = SRI_LANKA_NATIONAL_OUTLETS.filter((o) => Boolean(o.rssUrl)).map(
+    async (outlet) => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3500);
+        const res = await fetch(outlet.rssUrl!, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36 SafeRoute/1.0',
+          },
+        });
+        clearTimeout(timeout);
+
+        if (!res.ok) return;
+        const xml = await res.text();
+        const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+
+        for (const m of itemMatches.slice(0, 20)) {
+          const block = m[1];
+          const rawTitle = (block.match(/<title>([\s\S]*?)<\/title>/)?.[1] || '')
+            .replace(/<!\[CDATA\[|\]\]>/g, '')
+            .replace(/&amp;/g, '&')
+            .replace(/&#39;/g, "'")
+            .replace(/&quot;/g, '"')
+            .trim();
+          const pubDate = block.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1]?.trim() || '';
+          const link = (block.match(/<link>([\s\S]*?)<\/link>/)?.[1] || '')
+            .replace(/<!\[CDATA\[|\]\]>/g, '')
+            .trim();
+
+          const cleanTitle = rawTitle.replace(/\s+-\s+[^-]+$/, '').trim();
+          if (cleanTitle) {
+            results.push({
+              title: cleanTitle,
+              pubDate,
+              sourceName: outlet.displayName,
+              link: link || `https://${outlet.domain}`,
+            });
+          }
+        }
+      } catch {
+        // Silently skip individual direct RSS feed errors/timeouts
+      }
+    }
+  );
+
+  await Promise.allSettled(fetchPromises);
+  return results;
+}
+
+/**
+ * Calculates Levenshtein Distance between two strings.
+ */
+function levenshteinDistance(a: string, b: string): number {
+  const matrix: number[][] = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+/**
+ * Performs fuzzy locality matching between a crime headline and a target locality token/name.
+ * Accounts for Sinhala transliterations, sub-token overlap, and minor spelling differences.
+ */
+export function fuzzyLocalityMatch(headline: string, targetLocality: string): boolean {
+  const lowerHeadline = headline.toLowerCase();
+  const lowerTarget = targetLocality.toLowerCase().trim();
+  if (!lowerTarget || lowerTarget.length < 3) return false;
+
+  // 1. Direct substring match
+  if (lowerHeadline.includes(lowerTarget)) return true;
+
+  // 2. Transliteration mapping check
+  const altNames = SRI_LANKA_LOCALITY_TRANSLITERATIONS[lowerTarget] || [];
+  for (const alt of altNames) {
+    if (lowerHeadline.includes(alt.toLowerCase())) return true;
+  }
+
+  // 3. Token-by-token comparison & fuzzy Levenshtein check
+  const headlineWords = lowerHeadline
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 4);
+
+  const targetWords = lowerTarget
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 4);
+
+  for (const tw of targetWords) {
+    for (const hw of headlineWords) {
+      if (hw === tw) return true;
+      if (tw.length >= 5 && hw.length >= 5) {
+        if (levenshteinDistance(tw, hw) <= 2) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * Extracts key Sri Lankan town/suburb/locality tokens from a place name and address
  * (e.g., "Pettah", "Dehiwala", "Bambalapitiya", "Colombo Fort", "Kandy", "Galle",
  * "Kotahena", "Borella", "Mount Lavinia", "Wellawatte", "Nugegoda", "Maradana").
+ * Includes transliteration expansions.
  */
 export function extractSriLankaLocalityTokens(
   locationName: string,
@@ -117,7 +244,20 @@ export function extractSriLankaLocalityTokens(
     }
   }
 
-  return tokens.slice(0, 5);
+  // Include transliterations for extracted tokens
+  const expandedTokens: string[] = [...tokens];
+  for (const tok of tokens) {
+    const alts = SRI_LANKA_LOCALITY_TRANSLITERATIONS[tok.toLowerCase()];
+    if (alts) {
+      for (const alt of alts) {
+        if (!expandedTokens.some((t) => t.toLowerCase() === alt.toLowerCase())) {
+          expandedTokens.push(alt);
+        }
+      }
+    }
+  }
+
+  return expandedTokens.slice(0, 8);
 }
 
 /**
