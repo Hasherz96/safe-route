@@ -13,8 +13,16 @@ import {
   fuzzyLocalityMatch,
   getSriLankaGeminiPromptAppendix,
   matchSriLankaNationalOutlet,
-  SRI_LANKA_CRIME_KEYWORDS,
 } from './src/sriLankaPrototype/sriLankaNewsEngine';
+import {
+  computeRecencyFromDate,
+  incidentFromArticle,
+  mergeIncidents,
+  preprocessAndClassifyHeadline,
+  scoreIncidents,
+  type RawFeedArticle,
+  type RejectedArticle,
+} from './src/safetyScoring';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,298 +96,6 @@ Respond ONLY with a valid JSON object matching this exact schema:
     "Practical safety advice 3"
   ]
 }${ENABLE_SRI_LANKA_PROTOTYPE ? getSriLankaGeminiPromptAppendix() : ''}`;
-
-interface RawFeedArticle {
-  title: string;
-  pubDate: string;
-  sourceName: string;
-  sourceType: 'Local News' | 'Social Media';
-  link: string;
-  daysAgo: number;
-  recencyText: string;
-  matchedZone: string;
-}
-
-interface RejectedArticle {
-  title: string;
-  reason: string;
-}
-
-function computeRecencyFromDate(dateStr: string): {
-  daysAgo: number;
-  recencyText: string;
-  recencyMultiplier: number;
-} {
-  const parsed = Date.parse(dateStr);
-  if (Number.isNaN(parsed)) {
-    return { daysAgo: 14, recencyText: '2 weeks ago', recencyMultiplier: 0.7 };
-  }
-  const now = Date.now();
-  const diffMs = Math.max(0, now - parsed);
-  const daysAgo = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  let recencyText = 'Recent';
-  if (daysAgo === 0) {
-    const hours = Math.max(1, Math.floor(diffMs / (1000 * 60 * 60)));
-    recencyText = `${hours} hour${hours === 1 ? '' : 's'} ago`;
-  } else if (daysAgo === 1) {
-    recencyText = '1 day ago';
-  } else if (daysAgo < 7) {
-    recencyText = `${daysAgo} days ago`;
-  } else if (daysAgo < 30) {
-    const weeks = Math.max(1, Math.floor(daysAgo / 7));
-    recencyText = `${weeks} week${weeks === 1 ? '' : 's'} ago`;
-  } else if (daysAgo < 365) {
-    const months = Math.max(1, Math.floor(daysAgo / 30));
-    recencyText = `${months} month${months === 1 ? '' : 's'} ago`;
-  } else {
-    const years = Math.max(1, Math.floor(daysAgo / 365));
-    recencyText = `${years} year${years === 1 ? '' : 's'} ago`;
-  }
-
-  const recencyMultiplier =
-    daysAgo <= 7 ? 1.0 : daysAgo <= 30 ? 0.7 : daysAgo <= 90 ? 0.4 : 0.1;
-
-  return { daysAgo, recencyText, recencyMultiplier };
-}
-
-/**
- * STAGE 1 PREPROCESSOR:
- * Distinguishes actual criminal incidents from film/movie shoots (e.g. "Spider-Man shooting location"),
- * photo shoots, sports metaphors, and non-crime news.
- */
-function preprocessAndClassifyHeadline(title: string): {
-  isCrime: boolean;
-  rejectionReason?: string;
-  crime_type: 'Violent' | 'Burglary' | 'Theft' | 'Nuisance';
-  severity_impact: 'High' | 'Medium' | 'Low';
-  csw: number;
-} {
-  const lower = title.toLowerCase();
-
-  // 1A. Multi-topic news roundups where unrelated stories are concatenated
-  if (
-    /^(in the news|morning briefing|evening briefing|daily digest|top stories|bay area news roundup|what to know today):/i.test(
-      lower
-    )
-  ) {
-    return {
-      isCrime: false,
-      rejectionReason: 'Multi-topic news roundup (crime not at target location)',
-      crime_type: 'Nuisance',
-      severity_impact: 'Low',
-      csw: 0,
-    };
-  }
-
-  // 1B. Film, TV, Movie, Photography & Entertainment Shoot Filter
-  const entertainmentShootPatterns: { pattern: RegExp; label: string }[] = [
-    {
-      pattern:
-        /\b(spider-?man|batman|avengers|marvel|dc studios|star wars|matrix|venom|deadpool|bond|mission impossible|superman|transformers|fast and furious)\b/i,
-      label: 'Film/franchise production reference (not a crime)',
-    },
-    {
-      pattern:
-        /\b(shooting location|filming location|location shoot|film shoot|movie shoot|commercial shoot|photo\s*shoot|music video shoot|fashion shoot|drone shoot|video shoot|scenes shot|shot scenes|shooting scenes)\b/i,
-      label: 'Film/photography shoot location (not a crime)',
-    },
-    {
-      pattern:
-        /\b(filming|on set|movie set|film crew|casting call|box office|trailer|premiere|sequel|blockbuster|hollywood|netflix|hbo|disney|actor|actress|stunt double|cinematography|screenplay|tv series)\b/i,
-      label: 'Entertainment/media production coverage',
-    },
-  ];
-
-  for (const rule of entertainmentShootPatterns) {
-    if (rule.pattern.test(lower)) {
-      return {
-        isCrime: false,
-        rejectionReason: rule.label,
-        crime_type: 'Nuisance',
-        severity_impact: 'Low',
-        csw: 0,
-      };
-    }
-  }
-
-  // 1C. Sports & Athletic Metaphor Filter ("shooting", "shot", "steal", "attack")
-  const sportsPatterns =
-    /\b(basketball|nba|wnba|mlb|nhl|mls|fifa|ufc|pga|golf|tennis|hockey|soccer|touchdown|quarterback|free throw|three-pointer|3-point|field goal|shooting guard|shooting percentage|penalty shot|slapshot|playoffs|championship|tournament|halftime|innings|box score)\b/i;
-  const hasExplicitCrimeContext =
-    /\b(police|sfpd|nypd|cpd|spd|lapd|arrested|suspect|charged|homicide|detective|felony|indicted|gunpoint|911|robbery|mugging|shooting near|shooting in|shooting at|shot in|shot near)\b/i.test(
-      lower
-    );
-
-  if (sportsPatterns.test(lower) && !hasExplicitCrimeContext) {
-    return {
-      isCrime: false,
-      rejectionReason: 'Sports/athletic coverage (non-criminal)',
-      crime_type: 'Nuisance',
-      severity_impact: 'Low',
-      csw: 0,
-    };
-  }
-
-  // 1D. Medical, Beverage & Figurative Idiom Filter
-  const figurativePatterns =
-    /\b(flu shot|vaccine|booster shot|covid shot|immunization|espresso shot|tequila shot|shot of whiskey|heart attack|panic attack|asthma attack|anxiety attack|time capsule|murder mystery|podcast|book review|theater review|broadway|concert tour)\b/i;
-  if (figurativePatterns.test(lower) && !hasExplicitCrimeContext) {
-    return {
-      isCrime: false,
-      rejectionReason: 'Medical/figurative expression (non-criminal)',
-      crime_type: 'Nuisance',
-      severity_impact: 'Low',
-      csw: 0,
-    };
-  }
-
-  // 1E. Ambiguous "shooting" / "shot" verification:
-  // If the headline contains "shoot" or "shot", verify it has real criminal/violence or geographic shooting context
-  if (/\b(shoot|shooting|shot)\b/i.test(lower)) {
-    const criminalShootingContext =
-      /\b(police|sfpd|nypd|cpd|spd|lapd|sheriff|trooper|officer|suspect|victim|hospital|critical|injured|wounded|killed|dead|fatal|homicide|murder|gun|firearm|stray bullet|drive-by|armed|robbery|carjacking|arrest|investigat|crime|scene|block of|alley|station|shooting near|shooting in|shooting at|shot near|shot in|shot at|gunfire)\b/i;
-    if (!criminalShootingContext.test(lower)) {
-      return {
-        isCrime: false,
-        rejectionReason:
-          'Ambiguous use of "shoot/shot" without law-enforcement or crime corroboration',
-        crime_type: 'Nuisance',
-        severity_impact: 'Low',
-        csw: 0,
-      };
-    }
-  }
-
-  // 2. Classify Verified Criminal Incidents by CSW Category
-  // Category A: Violent / High Severity (CSW = 10 to 12)
-  const violentKeywords = [
-    'shooting',
-    'shot',
-    'gunfire',
-    'homicide',
-    'murder',
-    'killed',
-    'fatal',
-    'stabbing',
-    'stabbed',
-    'kidnapping',
-    'abduction',
-    'armed robbery',
-    'carjacking',
-    'gunpoint',
-    'gunman',
-    'stray bullet',
-    'mass shooting',
-    'deadly',
-    ...(ENABLE_SRI_LANKA_PROTOTYPE ? SRI_LANKA_CRIME_KEYWORDS.violent : []),
-  ];
-  if (violentKeywords.some((kw) => lower.includes(kw))) {
-    const isExtreme =
-      lower.includes('homicide') ||
-      lower.includes('murder') ||
-      lower.includes('fatal') ||
-      lower.includes('killed') ||
-      lower.includes('mass shooting') ||
-      lower.includes('hacked to death') ||
-      lower.includes('grenade attack');
-    return {
-      isCrime: true,
-      crime_type: 'Violent',
-      severity_impact: 'High',
-      csw: isExtreme ? 12 : 10,
-    };
-  }
-
-  // Category B: Property / Moderate Severity (CSW = 5 to 7)
-  const moderateKeywords = [
-    'burglary',
-    'burglar',
-    'robbery',
-    'robbed',
-    'assault',
-    'attacked',
-    'unprovoked attack',
-    'auto theft',
-    'stolen car',
-    'stolen vehicle',
-    'smash-and-grab',
-    'smash and grab',
-    'home invasion',
-    'looting',
-    'suspect arrested',
-    'police chase',
-    'felony',
-    ...(ENABLE_SRI_LANKA_PROTOTYPE ? SRI_LANKA_CRIME_KEYWORDS.moderate : []),
-  ];
-  if (moderateKeywords.some((kw) => lower.includes(kw))) {
-    const isHigherMod =
-      lower.includes('assault') ||
-      lower.includes('robbery') ||
-      lower.includes('home invasion') ||
-      lower.includes('smash-and-grab');
-    return {
-      isCrime: true,
-      crime_type: 'Burglary',
-      severity_impact: 'Medium',
-      csw: isHigherMod ? 7 : 5,
-    };
-  }
-
-  // Category C: Minor Crimes (CSW = 2 to 3)
-  const minorKeywords = [
-    'theft',
-    'shoplifting',
-    'pickpocket',
-    'vandalism',
-    'vandalized',
-    'break-in',
-    'bipping',
-    'car break-in',
-    'stolen',
-    'larceny',
-    'graffiti',
-    'package thief',
-    'retail theft',
-    'retail crime',
-  ];
-  if (minorKeywords.some((kw) => lower.includes(kw))) {
-    return {
-      isCrime: true,
-      crime_type: 'Theft',
-      severity_impact: 'Low',
-      csw: lower.includes('break-in') || lower.includes('retail') ? 3 : 2,
-    };
-  }
-
-  // Category D: Nuisance / Low Risk (CSW = 1)
-  const nuisanceKeywords = [
-    'nuisance',
-    'loitering',
-    'trespassing',
-    'public intoxication',
-    'disorderly conduct',
-    'disturbance',
-    'illegal sideshow',
-    'curfew violation',
-  ];
-  if (nuisanceKeywords.some((kw) => lower.includes(kw))) {
-    return {
-      isCrime: true,
-      crime_type: 'Nuisance',
-      severity_impact: 'Low',
-      csw: 1,
-    };
-  }
-
-  return {
-    isCrime: false,
-    rejectionReason: 'General news article (no specific criminal offense)',
-    crime_type: 'Nuisance',
-    severity_impact: 'Low',
-    csw: 0,
-  };
-}
 
 /**
  * STAGE 2 PREPROCESSOR:
@@ -831,49 +547,9 @@ function buildAnalysisFromVerifiedArticles(
   articles: RawFeedArticle[],
   preprocessingAudit: any
 ) {
-  const incident_breakdown = articles.map((art) => {
-    const { crime_type, severity_impact, csw } = preprocessAndClassifyHeadline(
-      art.title
-    );
-    const source_multiplier = art.sourceType === 'Social Media' ? 0.5 : 1.0;
-    const { recencyMultiplier } = computeRecencyFromDate(art.pubDate);
-    const calculated_penalty = Number(
-      (csw * source_multiplier * recencyMultiplier).toFixed(2)
-    );
-
-    return {
-      crime_type,
-      description: art.title,
-      source_type: art.sourceType,
-      source_name: art.sourceName,
-      recency: art.recencyText,
-      severity_impact,
-      calculated_penalty,
-      csw_weight: csw,
-      source_multiplier,
-      recency_multiplier: recencyMultiplier,
-      source_url: art.link,
-      matched_zone: art.matchedZone,
-    };
-  });
-
-  const total_penalty = Number(
-    incident_breakdown
-      .reduce((sum, inc) => sum + inc.calculated_penalty, 0)
-      .toFixed(2)
-  );
-
-  const safety_rating =
-    incident_breakdown.length === 0
-      ? 5.0
-      : Number(Math.max(1.0, 5.0 - total_penalty / 5).toFixed(1));
-
-  const risk_level: 'Safe' | 'Moderate Risk' | 'High Risk' =
-    safety_rating >= 4.0
-      ? 'Safe'
-      : safety_rating >= 3.0
-        ? 'Moderate Risk'
-        : 'High Risk';
+  const incident_breakdown = articles.map(incidentFromArticle);
+  const { total_penalty, safety_rating, risk_level } =
+    scoreIncidents(incident_breakdown);
 
   const violentCount = incident_breakdown.filter(
     (i) => i.crime_type === 'Violent'
@@ -1165,96 +841,18 @@ Return the strict JSON object only.`;
           return;
         }
 
-        // Otherwise normalize the verified incidents
-        const normalizedIncidents = postFilteredIncidents.map(
-          (item: any, idx: number) => {
-            const desc = String(item?.description || '');
-            const check = preprocessAndClassifyHeadline(desc);
-            const crime_type = check.crime_type;
-            const severity_impact = check.severity_impact;
-            const csw =
-              typeof item?.csw_weight === 'number' && item.csw_weight > 0
-                ? item.csw_weight
-                : check.csw;
-            const source_type =
-              item?.source_type === 'Social Media'
-                ? 'Social Media'
-                : 'Local News';
-            const source_multiplier =
-              source_type === 'Social Media' ? 0.5 : 1.0;
-
-            const recencyStr = String(
-              item?.recency ||
-                preprocessed.verifiedArticles[idx]?.recencyText ||
-                '2 weeks ago'
-            );
-            let recency_multiplier = 0.7;
-            const lowerRec = recencyStr.toLowerCase();
-            if (
-              lowerRec.includes('hour') ||
-              lowerRec.includes('today') ||
-              lowerRec.includes('1 day') ||
-              lowerRec.includes('2 day') ||
-              lowerRec.includes('3 day') ||
-              lowerRec.includes('4 day') ||
-              lowerRec.includes('5 day') ||
-              lowerRec.includes('6 day')
-            ) {
-              recency_multiplier = 1.0;
-            } else if (lowerRec.includes('week')) {
-              recency_multiplier = 0.7;
-            } else if (lowerRec.includes('month')) {
-              recency_multiplier = 0.4;
-            } else if (lowerRec.includes('year')) {
-              recency_multiplier = 0.1;
-            }
-
-            const calculated_penalty = Number(
-              (csw * source_multiplier * recency_multiplier).toFixed(2)
-            );
-
-            return {
-              crime_type,
-              description: desc,
-              source_type,
-              source_name: String(
-                item?.source_name ||
-                  preprocessed.verifiedArticles[idx]?.sourceName ||
-                  'Local News'
-              ),
-              recency: recencyStr,
-              severity_impact,
-              calculated_penalty,
-              csw_weight: csw,
-              source_multiplier,
-              recency_multiplier,
-              source_url:
-                item?.source_url || preprocessed.verifiedArticles[idx]?.link,
-              matched_zone:
-                item?.matched_zone ||
-                preprocessed.verifiedArticles[idx]?.matchedZone ||
-                `Within 200m · ${displayLocation}`,
-            };
-          }
+        // Otherwise score every verified 200m article from its own metadata, plus
+        // any additional incidents Gemini found that aren't one of those articles
+        const normalizedIncidents = mergeIncidents(
+          postFilteredIncidents,
+          preprocessed.verifiedArticles,
+          displayLocation
         );
 
         preprocessingAudit.verified_crime_count = normalizedIncidents.length;
 
-        const total_penalty = Number(
-          normalizedIncidents
-            .reduce((acc: number, cur: any) => acc + cur.calculated_penalty, 0)
-            .toFixed(2)
-        );
-        const safety_rating =
-          normalizedIncidents.length === 0
-            ? 5.0
-            : Number(Math.max(1.0, 5.0 - total_penalty / 5).toFixed(1));
-        const risk_level: 'Safe' | 'Moderate Risk' | 'High Risk' =
-          safety_rating >= 4.0
-            ? 'Safe'
-            : safety_rating >= 3.0
-              ? 'Moderate Risk'
-              : 'High Risk';
+        const { total_penalty, safety_rating, risk_level } =
+          scoreIncidents(normalizedIncidents);
 
         const groundingChunks =
           response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
