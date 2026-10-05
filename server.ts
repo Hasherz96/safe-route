@@ -9,6 +9,8 @@ import { ENABLE_SRI_LANKA_PROTOTYPE } from './src/sriLankaPrototype/sriLankaConf
 import {
   buildSriLankaNationalNewsQueries,
   extractSriLankaLocalityTokens,
+  fetchDirectSriLankaRssFeeds,
+  fuzzyLocalityMatch,
   getSriLankaGeminiPromptAppendix,
   matchSriLankaNationalOutlet,
   SRI_LANKA_CRIME_KEYWORDS,
@@ -398,12 +400,17 @@ function verify200mZoneMatch(
     .trim()
     .toLowerCase();
 
-  // Check direct target place name match
-  if (cleanTarget && cleanTarget.length >= 3 && lowerTitle.includes(cleanTarget)) {
-    return {
-      matched: true,
-      matchedZone: `Within 200m · ${locationName.split(',')[0].trim()}`,
-    };
+  // Check direct target place name match or fuzzy locality match
+  if (cleanTarget && cleanTarget.length >= 3) {
+    if (
+      lowerTitle.includes(cleanTarget) ||
+      (ENABLE_SRI_LANKA_PROTOTYPE && fuzzyLocalityMatch(title, cleanTarget))
+    ) {
+      return {
+        matched: true,
+        matchedZone: `Within 200m · ${locationName.split(',')[0].trim()}`,
+      };
+    }
   }
 
   // Check any of the 200m surrounding streets discovered via Google Maps
@@ -421,7 +428,8 @@ function verify200mZoneMatch(
       (streetBase.length >= 4 &&
         new RegExp(`\\b${streetBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(
           lowerTitle
-        ))
+        )) ||
+      (ENABLE_SRI_LANKA_PROTOTYPE && fuzzyLocalityMatch(title, street))
     ) {
       return {
         matched: true,
@@ -433,7 +441,10 @@ function verify200mZoneMatch(
   // Check any of the 200m neighboring places/landmarks discovered via Google Maps
   for (const placeName of nearbyPlaceNames) {
     const cleanPlace = placeName.toLowerCase().trim();
-    if (cleanPlace.length >= 4 && lowerTitle.includes(cleanPlace)) {
+    if (
+      (cleanPlace.length >= 4 && lowerTitle.includes(cleanPlace)) ||
+      (ENABLE_SRI_LANKA_PROTOTYPE && fuzzyLocalityMatch(title, placeName))
+    ) {
       return {
         matched: true,
         matchedZone: `Within 200m · Near ${placeName}`,
@@ -446,7 +457,10 @@ function verify200mZoneMatch(
     const localities = extractSriLankaLocalityTokens(locationName, address);
     for (const locToken of localities) {
       const lowerLoc = locToken.toLowerCase();
-      if (lowerLoc.length >= 4 && lowerTitle.includes(lowerLoc)) {
+      if (
+        (lowerLoc.length >= 4 && lowerTitle.includes(lowerLoc)) ||
+        fuzzyLocalityMatch(title, locToken)
+      ) {
         return {
           matched: true,
           matchedZone: `Within 200m · ${locToken}`,
@@ -458,8 +472,17 @@ function verify200mZoneMatch(
   // Also check individual significant tokens of the searched place name
   const targetTokens = cleanTarget
     .split(/\s+/)
-    .filter((t) => t.length >= 4 && !['park', 'city', 'downtown', 'north', 'south', 'east', 'west', 'sri', 'lanka'].includes(t));
-  if (targetTokens.length > 0 && targetTokens.every((t) => lowerTitle.includes(t))) {
+    .filter(
+      (t) =>
+        t.length >= 4 &&
+        !['park', 'city', 'downtown', 'north', 'south', 'east', 'west', 'sri', 'lanka'].includes(t)
+    );
+  if (
+    targetTokens.length > 0 &&
+    targetTokens.every(
+      (t) => lowerTitle.includes(t) || (ENABLE_SRI_LANKA_PROTOTYPE && fuzzyLocalityMatch(title, t))
+    )
+  ) {
     return {
       matched: true,
       matchedZone: `Within 200m · ${locationName.split(',')[0].trim()}`,
@@ -533,6 +556,66 @@ async function fetchAndPreprocess200mCrimeReports(
       ];
 
   const seenTitles = new Set<string>();
+
+  // Direct RSS Feed Fetching for Sri Lanka National Outlets (solves Google News indexing gaps)
+  if (ENABLE_SRI_LANKA_PROTOTYPE) {
+    try {
+      const directArticles = await fetchDirectSriLankaRssFeeds();
+      for (const art of directArticles) {
+        if (verifiedArticles.length >= 10) break;
+        if (!art.title || seenTitles.has(art.title.toLowerCase())) continue;
+        seenTitles.add(art.title.toLowerCase());
+        rawCount++;
+
+        const classification = preprocessAndClassifyHeadline(art.title);
+        if (!classification.isCrime) {
+          rejectedNonCrimeCount++;
+          if (rejectedExamples.length < 5) {
+            rejectedExamples.push({
+              title: art.title,
+              reason:
+                classification.rejectionReason ||
+                'Filtered: Non-criminal news article',
+            });
+          }
+          continue;
+        }
+
+        const zoneCheck = verify200mZoneMatch(
+          art.title,
+          locationName,
+          surroundingStreets,
+          nearbyPlaceNames,
+          address
+        );
+
+        if (!zoneCheck.matched) {
+          rejectedOutsideRadiusCount++;
+          if (rejectedExamples.length < 5) {
+            rejectedExamples.push({
+              title: art.title,
+              reason: 'Filtered: Outside 200m neighboring street/landmark radius',
+            });
+          }
+          continue;
+        }
+
+        const { daysAgo, recencyText } = computeRecencyFromDate(art.pubDate);
+        verifiedArticles.push({
+          title: art.title,
+          pubDate: art.pubDate,
+          sourceName: art.sourceName,
+          sourceType: 'Local News',
+          link: art.link,
+          daysAgo,
+          recencyText,
+          matchedZone: zoneCheck.matchedZone,
+        });
+      }
+    } catch {
+      // Ignore direct RSS fetch errors
+    }
+  }
 
   for (const queryStr of queries) {
     if (verifiedArticles.length >= 10) break;
@@ -877,6 +960,72 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+
+  app.all('/api/test/grounding', async (req, res) => {
+    const location =
+      (req.query.q as string) ||
+      (req.query.location as string) ||
+      req.body?.location ||
+      'Pettah Colombo Sri Lanka';
+    const candidateModels = [
+      'gemini-3.8-flash',
+      'gemini-flash-latest',
+      'gemini-3.1-flash-lite',
+    ];
+
+    let lastError: any = null;
+    for (const modelName of candidateModels) {
+      try {
+        const prompt = `Perform a safety and crime grounding test for location: "${location}". List recent verified police or news reports of crime within 200 meters. Return JSON with keys: location, summary, grounding_sources.`;
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            systemInstruction: SAFETY_SYSTEM_INSTRUCTION,
+            tools: [{ googleSearch: {} }],
+            temperature: 0.15,
+          },
+        });
+
+        const groundingMetadata = response.candidates?.[0]?.groundingMetadata || {};
+        const groundingChunks = groundingMetadata.groundingChunks || [];
+        const webSearchQueries = groundingMetadata.webSearchQueries || [];
+
+        const sources: { title: string; uri: string }[] = [];
+        for (const chunk of groundingChunks) {
+          if (chunk.web?.uri && chunk.web?.title) {
+            if (!sources.some((s) => s.uri === chunk.web!.uri)) {
+              sources.push({
+                title: chunk.web.title,
+                uri: chunk.web.uri,
+              });
+            }
+          }
+        }
+
+        res.json({
+          status: 'success',
+          modelUsed: modelName,
+          locationTested: location,
+          hasGroundingMetadata: Boolean(groundingMetadata),
+          webSearchQueries,
+          groundingChunksCount: groundingChunks.length,
+          groundingSources: sources,
+          rawResponseText: response.text,
+          testedAt: new Date().toISOString(),
+        });
+        return;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    res.status(500).json({
+      status: 'error',
+      message: lastError?.message || 'Failed to call Gemini with Google Search grounding',
+      testedAt: new Date().toISOString(),
+    });
+  });
 
   app.post('/api/safety/analyze', async (req, res) => {
     const {

@@ -465,11 +465,57 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
         ) {
           onQuotaExceeded();
         }
-        console.error('Route computation error:', err);
-        onRouteError(
-          'Could not calculate turn-by-turn directions for the selected mode.'
-        );
-        onRouteComputed(null);
+        console.warn('Route computation fallback activated:', msg);
+
+        // Fallback straight-line corridor route when Routes API returns PERMISSION_DENIED or fails
+        if (origin && destination) {
+          const PolylineClass = (mapsLib as any)?.Polyline;
+          const fallbackPath = [origin.location, destination.location];
+          if (PolylineClass) {
+            const outerPoly = new PolylineClass({
+              path: fallbackPath,
+              geodesic: true,
+              strokeColor: '#090d16',
+              strokeOpacity: 0.85,
+              strokeWeight: 7,
+              map,
+              zIndex: 10,
+            });
+            const innerPoly = new PolylineClass({
+              path: fallbackPath,
+              geodesic: true,
+              strokeColor: accent.hex,
+              strokeOpacity: 0.95,
+              strokeWeight: 4,
+              map,
+              zIndex: 11,
+            });
+            polylinesRef.current = [outerPoly, innerPoly];
+          }
+
+          const distM = haversineDistanceMeters(origin.location, destination.location);
+          const durMin = Math.max(1, Math.round(distM / 80));
+          onRouteComputed({
+            distanceText: distM >= 1000 ? `${(distM / 1000).toFixed(1)} km` : `${distM} m`,
+            durationText: `${durMin} min`,
+            distanceMeters: distM,
+            durationMillis: durMin * 60000,
+            path: fallbackPath,
+            steps: [
+              {
+                instruction: `Direct corridor from ${origin.name} to ${destination.name}`,
+                distanceText: `${distM} m`,
+                durationText: `${durMin} min`,
+              },
+            ],
+            travelMode,
+          });
+        } else {
+          onRouteError(
+            'Could not calculate turn-by-turn directions for the selected mode.'
+          );
+          onRouteComputed(null);
+        }
       } finally {
         if (!isCancelled) {
           setIsComputingRoute(false);
