@@ -24,7 +24,13 @@ export interface RejectedArticle {
   reason: string;
 }
 
-/** Recency multiplier: <= 7 days = 1.0 | <= 30 days = 0.7 | <= 90 days = 0.4 | older = 0.1 */
+/** Articles and incidents older than this are discarded before scoring. */
+export const MAX_ARTICLE_AGE_DAYS = 180;
+
+/**
+ * Recency multiplier: <= 7 days = 1.0 | <= 30 days = 0.7 | <= 90 days = 0.4 | <= 180 days = 0.1.
+ * Anything older than MAX_ARTICLE_AGE_DAYS is excluded upstream and never scored.
+ */
 export function recencyMultiplierFromDays(daysAgo: number): number {
   return daysAgo <= 7 ? 1.0 : daysAgo <= 30 ? 0.7 : daysAgo <= 90 ? 0.4 : 0.1;
 }
@@ -454,16 +460,19 @@ export function incidentFromGeminiItem(item: any, displayLocation: string): Inci
  * Combines Gemini's (already crime-filtered) incidents with the verified feed
  * articles. Every verified article is always scored exactly once, from its own
  * metadata; Gemini incidents that refer to one of them are deduplicated, and
- * only incidents Gemini found on its own are added on top.
+ * only incidents Gemini found on its own are added on top (unless their
+ * recency is older than MAX_ARTICLE_AGE_DAYS).
  */
 export function mergeIncidents(
   geminiItems: any[],
   verifiedArticles: RawFeedArticle[],
   displayLocation: string
 ): IncidentItem[] {
-  const geminiOnly = geminiItems.filter(
-    (item) => !findMatchingArticle(item, verifiedArticles)
-  );
+  const geminiOnly = geminiItems.filter((item) => {
+    if (findMatchingArticle(item, verifiedArticles)) return false;
+    const ageDays = parseRecencyTextToDays(String(item?.recency || ''));
+    return ageDays === null || ageDays <= MAX_ARTICLE_AGE_DAYS;
+  });
   return [
     ...verifiedArticles.map(incidentFromArticle),
     ...geminiOnly.map((item) => incidentFromGeminiItem(item, displayLocation)),

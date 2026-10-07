@@ -49,6 +49,7 @@ export interface PreprocessingAudit {
   raw_candidates_scanned: number;
   rejected_non_crime_count: number;
   rejected_outside_radius_count: number;
+  rejected_too_old_count?: number;
   verified_crime_count: number;
   rejected_examples: RejectedArticleAudit[];
   scanned_streets_200m: string[];

@@ -17,6 +17,7 @@ import {
 import {
   computeRecencyFromDate,
   incidentFromArticle,
+  MAX_ARTICLE_AGE_DAYS,
   mergeIncidents,
   preprocessAndClassifyHeadline,
   scoreIncidents,
@@ -57,7 +58,8 @@ Your task is to evaluate the real-time pedestrian and visitor safety within a st
    - Nuisance / Low Risk (Public Intoxication, Loitering, Noise, Trespassing, Disorderly Conduct): CSW = 1
 3. Multipliers:
    - Source Multiplier: Credible Local/National News = 1.0 | Social Media (Reddit, X, Facebook) = 0.5
-   - Recency Multiplier: < 7 days = 1.0 | 8–30 days = 0.7 | 31–90 days = 0.4 | > 90 days = 0.1
+   - Recency Multiplier: < 7 days = 1.0 | 8–30 days = 0.7 | 31–90 days = 0.4 | 91–180 days = 0.1
+   - EXCLUDE any incident older than 180 days entirely; do not list it in incident_breakdown.
 4. Score Formula:
    - Incident Penalty = CSW * Source Multiplier * Recency Multiplier
    - Total Penalty = Sum of all Incident Penalties
@@ -222,6 +224,7 @@ async function fetchAndPreprocess200mCrimeReports(
   rawCount: number;
   rejectedNonCrimeCount: number;
   rejectedOutsideRadiusCount: number;
+  rejectedTooOldCount: number;
   rejectedExamples: RejectedArticle[];
 }> {
   const verifiedArticles: RawFeedArticle[] = [];
@@ -229,6 +232,7 @@ async function fetchAndPreprocess200mCrimeReports(
   let rawCount = 0;
   let rejectedNonCrimeCount = 0;
   let rejectedOutsideRadiusCount = 0;
+  let rejectedTooOldCount = 0;
 
   const primaryPlace = locationName.split(',')[0].trim();
   const addressParts = (address || '')
@@ -317,6 +321,16 @@ async function fetchAndPreprocess200mCrimeReports(
         }
 
         const { daysAgo, recencyText } = computeRecencyFromDate(art.pubDate);
+        if (daysAgo > MAX_ARTICLE_AGE_DAYS) {
+          rejectedTooOldCount++;
+          if (rejectedExamples.length < 5) {
+            rejectedExamples.push({
+              title: art.title,
+              reason: `Filtered: Older than ${MAX_ARTICLE_AGE_DAYS} days`,
+            });
+          }
+          continue;
+        }
         verifiedArticles.push({
           title: art.title,
           pubDate: art.pubDate,
@@ -437,6 +451,16 @@ async function fetchAndPreprocess200mCrimeReports(
           }
 
           const { daysAgo, recencyText } = computeRecencyFromDate(pubDate);
+          if (daysAgo > MAX_ARTICLE_AGE_DAYS) {
+            rejectedTooOldCount++;
+            if (rejectedExamples.length < 5) {
+              rejectedExamples.push({
+                title: cleanTitle,
+                reason: `Filtered: Older than ${MAX_ARTICLE_AGE_DAYS} days`,
+              });
+            }
+            continue;
+          }
           verifiedArticles.push({
             title: cleanTitle,
             pubDate,
@@ -513,6 +537,16 @@ async function fetchAndPreprocess200mCrimeReports(
           ? new Date(createdUtcMs).toUTCString()
           : '';
         const { daysAgo, recencyText } = computeRecencyFromDate(pubDate);
+        if (daysAgo > MAX_ARTICLE_AGE_DAYS) {
+          rejectedTooOldCount++;
+          if (rejectedExamples.length < 5) {
+            rejectedExamples.push({
+              title: cleanTitle,
+              reason: `Filtered: Older than ${MAX_ARTICLE_AGE_DAYS} days`,
+            });
+          }
+          continue;
+        }
 
         verifiedArticles.push({
           title: cleanTitle,
@@ -538,6 +572,7 @@ async function fetchAndPreprocess200mCrimeReports(
     rawCount,
     rejectedNonCrimeCount,
     rejectedOutsideRadiusCount,
+    rejectedTooOldCount,
     rejectedExamples,
   };
 }
@@ -742,6 +777,7 @@ async function startServer() {
       raw_candidates_scanned: preprocessed.rawCount,
       rejected_non_crime_count: preprocessed.rejectedNonCrimeCount,
       rejected_outside_radius_count: preprocessed.rejectedOutsideRadiusCount,
+      rejected_too_old_count: preprocessed.rejectedTooOldCount,
       verified_crime_count: preprocessed.verifiedArticles.length,
       rejected_examples: preprocessed.rejectedExamples,
       scanned_streets_200m: surroundingStreets,

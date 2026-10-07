@@ -2,9 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   findMatchingArticle,
+  MAX_ARTICLE_AGE_DAYS,
   mergeIncidents,
   parseRecencyTextToDays,
   preprocessAndClassifyHeadline,
+  recencyMultiplierFromDays,
   recencyMultiplierFromText,
   scoreIncidents,
   type RawFeedArticle,
@@ -69,8 +71,34 @@ describe('recency text parsing', () => {
     assert.equal(recencyMultiplierFromText('a week ago'), 1.0);
     assert.equal(recencyMultiplierFromText('2 weeks ago'), 0.7);
     assert.equal(recencyMultiplierFromText('2 months ago'), 0.4);
+    assert.equal(recencyMultiplierFromText('4 months ago'), 0.1);
     assert.equal(recencyMultiplierFromText('6 months ago'), 0.1);
-    assert.equal(recencyMultiplierFromText('1 year ago'), 0.1);
+  });
+
+  it('puts the band edges at 7, 30, 90 and 180 days', () => {
+    assert.equal(recencyMultiplierFromDays(7), 1.0);
+    assert.equal(recencyMultiplierFromDays(8), 0.7);
+    assert.equal(recencyMultiplierFromDays(30), 0.7);
+    assert.equal(recencyMultiplierFromDays(31), 0.4);
+    assert.equal(recencyMultiplierFromDays(90), 0.4);
+    assert.equal(recencyMultiplierFromDays(91), 0.1);
+    assert.equal(recencyMultiplierFromDays(MAX_ARTICLE_AGE_DAYS), 0.1);
+  });
+
+  it('drops Gemini-only incidents older than 180 days', () => {
+    const incidents = mergeIncidents(
+      [
+        { description: 'Shop burglary on Main Street Pettah', recency: '6 months ago' },
+        { description: 'Man murdered near Pettah market', recency: '7 months ago' },
+        { description: 'Stabbing outside Pettah bus stand', recency: '1 year ago' },
+      ],
+      [],
+      'Pettah'
+    );
+    assert.deepEqual(
+      incidents.map((i) => i.description),
+      ['Shop burglary on Main Street Pettah']
+    );
   });
 
   it('defaults unparseable text to 0.7', () => {

@@ -836,8 +836,8 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
                         Recency Multipliers:
                       </span>{' '}
                       <span className="font-mono-tabular">
-                        &lt;7d = 1.0 · 8–30d = 0.7 · 31–90d = 0.4 · &gt;90d =
-                        0.1
+                        &lt;7d = 1.0 · 8–30d = 0.7 · 31–90d = 0.4 · 91–180d =
+                        0.1 · &gt;180d excluded
                       </span>
                     </div>
                     <div className="pt-2 font-mono-tabular text-emerald-300">
