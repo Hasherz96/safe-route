@@ -105,6 +105,61 @@ export async function fetchDirectSriLankaRssFeeds(): Promise<
 }
 
 /**
+ * Extracts an article's publish date from its HTML page, checking JSON-LD
+ * `datePublished`, the `article:published_time` meta tag, then `<time datetime>`.
+ * Returns an ISO date string, or null if none is found.
+ */
+export function extractPublishDateFromHtml(html: string): string | null {
+  const candidates = [
+    html.match(/"datePublished"\s*:\s*"([^"]+)"/)?.[1],
+    html.match(/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i)?.[1],
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']article:published_time["']/i)?.[1],
+    html.match(/<time[^>]+datetime=["']([^"']+)["']/i)?.[1],
+  ];
+  for (const c of candidates) {
+    if (c && !Number.isNaN(Date.parse(c))) return new Date(c).toISOString();
+  }
+  return null;
+}
+
+// Publish dates never change, so remember them per URL across requests
+const publishDateCache = new Map<string, string | null>();
+const PUBLISH_DATE_CACHE_LIMIT = 500;
+
+/**
+ * Fetches an article page to read its publish date, for outlet feeds whose
+ * items have no <pubDate> (e.g. Ada Derana). Returns null on failure.
+ */
+export async function fetchArticlePublishDate(url: string): Promise<string | null> {
+  if (!url) return null;
+  if (publishDateCache.has(url)) return publishDateCache.get(url)!;
+
+  let date: string | null = null;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36 SafeRoute/1.0',
+      },
+    });
+    clearTimeout(timeout);
+    if (res.ok) date = extractPublishDateFromHtml(await res.text());
+  } catch {
+    // Timeouts and network errors leave the date unknown
+    return null;
+  }
+
+  if (publishDateCache.size >= PUBLISH_DATE_CACHE_LIMIT) {
+    publishDateCache.delete(publishDateCache.keys().next().value!);
+  }
+  publishDateCache.set(url, date);
+  return date;
+}
+
+/**
  * Calculates Levenshtein Distance between two strings.
  */
 function levenshteinDistance(a: string, b: string): number {

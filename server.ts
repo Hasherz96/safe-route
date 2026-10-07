@@ -9,6 +9,7 @@ import { ENABLE_SRI_LANKA_PROTOTYPE } from './src/sriLankaPrototype/sriLankaConf
 import {
   buildSriLankaNationalNewsQueries,
   extractSriLankaLocalityTokens,
+  fetchArticlePublishDate,
   fetchDirectSriLankaRssFeeds,
   fuzzyLocalityMatch,
   getSriLankaGeminiPromptAppendix,
@@ -318,6 +319,11 @@ async function fetchAndPreprocess200mCrimeReports(
             });
           }
           continue;
+        }
+
+        // Some outlet feeds (e.g. Ada Derana) omit <pubDate>; read it from the article page instead
+        if (Number.isNaN(Date.parse(art.pubDate))) {
+          art.pubDate = (await fetchArticlePublishDate(art.link)) || art.pubDate;
         }
 
         const { daysAgo, recencyText } = computeRecencyFromDate(art.pubDate);
