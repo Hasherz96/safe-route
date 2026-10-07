@@ -50,3 +50,11 @@
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.35);
 }
+
+/* Firefox ignores ::-webkit-scrollbar */
+@supports (-moz-appearance: none) {
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.2) transparent;
+  }
+}

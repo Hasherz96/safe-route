@@ -644,7 +644,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
 
         {/* Quick Destination Search Buttons */}
         {!directionsEnabled && (
-          <div className="mt-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-0.5">
+          <div className="mt-2 flex items-center gap-1.5 overflow-x-auto custom-scrollbar pt-0.5 pb-1.5">
             {QUICK_SEARCH_QUERIES.map((preset) => (
               <button
                 key={preset.label}

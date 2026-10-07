@@ -273,7 +273,7 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
             <>
               {/* Section Switcher Tabs */}
               <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-xl border border-slate-800/90 flex-1 overflow-x-auto no-scrollbar">
+                <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-xl border border-slate-800/90 flex-1 overflow-x-auto custom-scrollbar">
                   <button
                     type="button"
                     onClick={() => setActiveTab('intelligence')}
@@ -433,7 +433,7 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
                     </div>
 
                     {incidents.length > 0 && (
-                      <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-xl border border-slate-800/80 overflow-x-auto no-scrollbar">
+                      <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-xl border border-slate-800/80 overflow-x-auto custom-scrollbar">
                         {(
                           [
                             'ALL',
