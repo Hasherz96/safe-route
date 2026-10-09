@@ -17,8 +17,6 @@ import { AndroidSourceModal } from './components/AndroidSourceModal';
 import type {
   PlaceSelection,
   SafetyAnalysisResponse,
-  TravelModeOption,
-  ComputedRouteDetails,
   NearbyAreaContext,
 } from './types/safety';
 
@@ -32,24 +30,14 @@ export default function App() {
   );
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
 
-  const [origin, setOrigin] = useState<PlaceSelection | null>(null);
   const [destination, setDestination] = useState<PlaceSelection | null>(null);
   const [nearbyArea, setNearbyArea] = useState<NearbyAreaContext | null>(null);
-  const [directionsEnabled, setDirectionsEnabled] = useState(false);
-  const [travelMode, setTravelMode] = useState<TravelModeOption>('WALKING');
-  const [routeDetails, setRouteDetails] =
-    useState<ComputedRouteDetails | null>(null);
-  const [routeError, setRouteError] = useState<string | null>(null);
-
-  const [gpsStatus, setGpsStatus] = useState<
-    'idle' | 'locating' | 'granted' | 'denied'
-  >('idle');
-  const [gpsErrorMsg, setGpsErrorMsg] = useState<string | null>(null);
-
   const [safetyData, setSafetyData] =
     useState<SafetyAnalysisResponse | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [sheetExpanded, setSheetExpanded] = useState(false);
+
+  const handleQuotaExceeded = useCallback(() => setQuotaExceeded(true), []);
 
   useEffect(() => {
     const handleQuotaEvent = () => setQuotaExceeded(true);
@@ -62,9 +50,7 @@ export default function App() {
   const analyzeSafetyForPlace = useCallback(
     async (
       target: PlaceSelection,
-      areaContext?: NearbyAreaContext | null,
-      currentOrigin?: PlaceSelection | null,
-      mode?: TravelModeOption
+      areaContext?: NearbyAreaContext | null
     ) => {
       setIsAnalyzing(true);
       try {
@@ -76,8 +62,6 @@ export default function App() {
             address: target.address,
             coordinates: target.location,
             nearbyArea: areaContext || nearbyArea,
-            originName: currentOrigin?.name,
-            travelMode: mode || travelMode,
           }),
         });
         if (!res.ok) {
@@ -91,7 +75,7 @@ export default function App() {
         setIsAnalyzing(false);
       }
     },
-    [nearbyArea, travelMode]
+    [nearbyArea]
   );
 
   // When user selects a destination, we set destination; SafetyMapCanvas then scans the 200m radius via Google Maps Place.searchNearby and calls handleNearbyAreaDiscovered
@@ -103,110 +87,10 @@ export default function App() {
   const handleNearbyAreaDiscovered = useCallback(
     (target: PlaceSelection, discoveredArea: NearbyAreaContext) => {
       setNearbyArea(discoveredArea);
-      analyzeSafetyForPlace(target, discoveredArea, origin, travelMode);
+      analyzeSafetyForPlace(target, discoveredArea);
     },
-    [origin, travelMode, analyzeSafetyForPlace]
+    [analyzeSafetyForPlace]
   );
-
-  const handleSelectOrigin = useCallback(
-    (place: PlaceSelection) => {
-      setOrigin(place);
-      setGpsErrorMsg(null);
-      if (destination) {
-        analyzeSafetyForPlace(destination, nearbyArea, place, travelMode);
-      }
-    },
-    [destination, nearbyArea, travelMode, analyzeSafetyForPlace]
-  );
-
-  const handleRequestCurrentLocation = useCallback(() => {
-    if (!('geolocation' in navigator)) {
-      setGpsStatus('denied');
-      setGpsErrorMsg(
-        'Android GPS hardware unavailable in this browser context. Using nearby starting point.'
-      );
-      if (destination) {
-        setOrigin({
-          name: 'Current Location (Simulated GPS)',
-          address: 'Near active map sector',
-          location: {
-            lat: destination.location.lat - 0.012,
-            lng: destination.location.lng - 0.014,
-          },
-        });
-      }
-      return;
-    }
-
-    setGpsStatus('locating');
-    setGpsErrorMsg(null);
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setGpsStatus('granted');
-        setGpsErrorMsg(null);
-        const gpsPlace: PlaceSelection = {
-          name: 'Current GPS Location',
-          address: `${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`,
-          location: {
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-          },
-        };
-        setOrigin(gpsPlace);
-      },
-      (_err) => {
-        setGpsStatus('denied');
-        setGpsErrorMsg(
-          'ACCESS_FINE_LOCATION permission denied or unavailable. Assigned a nearby corridor origin so you can test turn-by-turn routing.'
-        );
-        if (destination) {
-          setOrigin({
-            name: 'Nearby Transit Hub (Fallback GPS)',
-            address: '0.9 mi from destination',
-            location: {
-              lat: destination.location.lat - 0.011,
-              lng: destination.location.lng - 0.012,
-            },
-          });
-        }
-      },
-      { enableHighAccuracy: true, timeout: 6000, maximumAge: 30000 }
-    );
-  }, [destination]);
-
-  const handleToggleDirections = useCallback(() => {
-    setDirectionsEnabled((prev) => {
-      const next = !prev;
-      if (next && !origin && destination) {
-        setOrigin({
-          name: 'Civic Center Station',
-          address: 'Starting corridor point',
-          location: {
-            lat: destination.location.lat - 0.0095,
-            lng: destination.location.lng - 0.0085,
-          },
-        });
-      }
-      if (!next) {
-        setRouteDetails(null);
-        setRouteError(null);
-      }
-      return next;
-    });
-  }, [origin, destination]);
-
-  const handleStartDirectionsFromSheet = useCallback(() => {
-    if (!directionsEnabled) {
-      handleToggleDirections();
-    }
-  }, [directionsEnabled, handleToggleDirections]);
-
-  const handleClearRoute = useCallback(() => {
-    setDirectionsEnabled(false);
-    setRouteDetails(null);
-    setRouteError(null);
-  }, []);
 
   const handleAndroidBackPress = useCallback(() => {
     if (isSourceModalOpen) {
@@ -217,12 +101,8 @@ export default function App() {
       setSheetExpanded(false);
       return true;
     }
-    if (directionsEnabled) {
-      handleClearRoute();
-      return true;
-    }
     return false;
-  }, [isSourceModalOpen, sheetExpanded, directionsEnabled, handleClearRoute]);
+  }, [isSourceModalOpen, sheetExpanded]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -237,7 +117,7 @@ export default function App() {
   return (
     <APIProvider
       apiKey={GOOGLE_MAPS_API_KEY}
-      libraries={['places', 'routes', 'marker']}
+      libraries={['places', 'marker']}
     >
       <div className="h-screen w-screen overflow-hidden flex flex-col bg-slate-950 text-slate-100">
         {quotaExceeded && (
@@ -291,16 +171,6 @@ export default function App() {
               className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap"
             >
               Crime Sheet
-            </a>
-            <a
-              href="#routing"
-              onClick={(e) => {
-                e.preventDefault();
-                if (!directionsEnabled) handleToggleDirections();
-              }}
-              className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-            >
-              Safe Routing
             </a>
             <a
               href="#source"
@@ -372,33 +242,18 @@ export default function App() {
             {/* Interactive Android Screen Viewport */}
             <div className="relative flex-1 w-full overflow-hidden">
               <FloatingSearchOverlay
-                origin={origin}
                 destination={destination}
-                directionsEnabled={directionsEnabled}
-                travelMode={travelMode}
-                gpsStatus={gpsStatus}
-                gpsErrorMsg={gpsErrorMsg}
                 onSelectDestination={handleSelectDestination}
-                onSelectOrigin={handleSelectOrigin}
-                onRequestCurrentLocation={handleRequestCurrentLocation}
-                onToggleDirections={handleToggleDirections}
-                onChangeTravelMode={setTravelMode}
-                onClearRoute={handleClearRoute}
-                onQuotaExceeded={() => setQuotaExceeded(true)}
+                onQuotaExceeded={handleQuotaExceeded}
               />
 
               <SafetyMapCanvas
-                origin={origin}
                 destination={destination}
-                directionsEnabled={directionsEnabled}
-                travelMode={travelMode}
                 safetyData={safetyData}
                 isAnalyzing={isAnalyzing}
                 onNearbyAreaDiscovered={handleNearbyAreaDiscovered}
-                onRouteComputed={setRouteDetails}
-                onRouteError={setRouteError}
                 onMarkerPress={() => setSheetExpanded(true)}
-                onQuotaExceeded={() => setQuotaExceeded(true)}
+                onQuotaExceeded={handleQuotaExceeded}
               />
 
               <SafetyBottomSheet
@@ -409,22 +264,8 @@ export default function App() {
                   )
                 }
                 destination={destination}
-                nearbyArea={nearbyArea}
                 safetyData={safetyData}
                 isAnalyzing={isAnalyzing}
-                routeDetails={routeDetails}
-                routeError={routeError}
-                onRefreshAnalysis={() => {
-                  if (destination) {
-                    analyzeSafetyForPlace(
-                      destination,
-                      nearbyArea,
-                      origin,
-                      travelMode
-                    );
-                  }
-                }}
-                onStartDirections={handleStartDirectionsFromSheet}
               />
             </div>
 
@@ -441,10 +282,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setSheetExpanded(false);
-                  handleClearRoute();
-                }}
+                onClick={() => setSheetExpanded(false)}
                 title="Android Home Button"
                 className="min-w-[44px] min-h-[36px] flex items-center justify-center text-slate-400 hover:text-white active:scale-90 transition-all cursor-pointer"
                 aria-label="Android Home Button"

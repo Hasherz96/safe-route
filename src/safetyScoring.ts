@@ -230,6 +230,21 @@ export function preprocessAndClassifyHeadline(title: string): HeadlineClassifica
     }
   }
 
+  // 1F. Accidents: "killed in crash" is a tragedy, not a crime risk for visitors
+  const accidentPattern =
+    /\b(crash|crashes|crashed|accident|accidents|collision|collided|collides|run over|knocked down|overturned|toppled|derailed|drowned|drowning|lightning|landslide|electrocuted|tree fell|wall collapse)\b/i;
+  const deliberateHarmPattern =
+    /\b(murder|murdered|stab|stabbed|stabbing|shot dead|gunmen|gunman|shooting|robbery|robbed|assault|assaulted|attacked|attack|kidnap|abduct|hacked|sword|grenade)\b/i;
+  if (accidentPattern.test(lower) && !deliberateHarmPattern.test(lower)) {
+    return {
+      isCrime: false,
+      rejectionReason: 'Accident or natural incident (not a crime)',
+      crime_type: 'Nuisance',
+      severity_impact: 'Low',
+      csw: 0,
+    };
+  }
+
   // 2. Classify Verified Criminal Incidents by CSW Category
   // Category A: Violent / High Severity (CSW = 10 to 12)
   const violentKeywords = [
@@ -271,28 +286,25 @@ export function preprocessAndClassifyHeadline(title: string): HeadlineClassifica
     };
   }
 
-  // Category B: Property / Moderate Severity (CSW = 5 to 7)
-  const moderateKeywords = [
-    'burglary',
-    'burglar',
-    'robbery',
-    'robbed',
-    'assault',
-    'attacked',
-    'unprovoked attack',
-    'auto theft',
-    'stolen car',
-    'stolen vehicle',
-    'smash-and-grab',
-    'smash and grab',
-    'home invasion',
-    'looting',
-    'suspect arrested',
-    'police chase',
-    'felony',
-    ...(ENABLE_SRI_LANKA_PROTOTYPE ? SRI_LANKA_CRIME_KEYWORDS.moderate : []),
-  ];
-  if (hasAnyKeyword(lower, moderateKeywords)) {
+  // Category B: Property / Moderate Severity (CSW = 5 to 7). Each keyword maps
+  // to the crime type it actually describes, so an assault isn't shown as a burglary.
+  const moderateKeywordsByType: Record<'Violent' | 'Burglary' | 'Theft', string[]> = {
+    Violent: ['assault', 'attacked', 'unprovoked attack'],
+    Burglary: ['burglary', 'burglar', 'home invasion', 'house break', 'housebreak'],
+    Theft: [
+      'robbery',
+      'robbed',
+      'auto theft',
+      'stolen car',
+      'stolen vehicle',
+      'smash-and-grab',
+      'smash and grab',
+      'looting',
+      ...(ENABLE_SRI_LANKA_PROTOTYPE ? SRI_LANKA_CRIME_KEYWORDS.moderate : []),
+    ],
+  };
+  for (const [crime_type, keywords] of Object.entries(moderateKeywordsByType)) {
+    if (!hasAnyKeyword(lower, keywords)) continue;
     const isHigherMod = hasAnyKeyword(lower, [
       'assault',
       'robbery',
@@ -301,33 +313,40 @@ export function preprocessAndClassifyHeadline(title: string): HeadlineClassifica
     ]);
     return {
       isCrime: true,
-      crime_type: 'Burglary',
+      crime_type: crime_type as CrimeType,
       severity_impact: 'Medium',
       csw: isHigherMod ? 7 : 5,
     };
   }
 
   // Category C: Minor Crimes (CSW = 2 to 3)
-  const minorKeywords = [
-    'theft',
-    'shoplifting',
-    'pickpocket',
-    'vandalism',
-    'vandalized',
-    'break-in',
-    'bipping',
-    'car break-in',
-    'stolen',
-    'larceny',
-    'graffiti',
-    'package thief',
-    'retail theft',
-    'retail crime',
-  ];
-  if (hasAnyKeyword(lower, minorKeywords)) {
+  const minorKeywordsByType: Record<'Burglary' | 'Theft' | 'Nuisance', string[]> = {
+    Burglary: ['break-in', 'car break-in', 'bipping', 'broke into', 'broken into'],
+    Theft: [
+      'theft',
+      'shoplifting',
+      'pickpocket',
+      'stolen',
+      'larceny',
+      'package thief',
+      'retail theft',
+      'retail crime',
+    ],
+    Nuisance: [
+      'vandalism',
+      'vandalized',
+      'vandalised',
+      'graffiti',
+      'damage to',
+      'damaging property',
+      'property damage',
+    ],
+  };
+  for (const [crime_type, keywords] of Object.entries(minorKeywordsByType)) {
+    if (!hasAnyKeyword(lower, keywords)) continue;
     return {
       isCrime: true,
-      crime_type: 'Theft',
+      crime_type: crime_type as CrimeType,
       severity_impact: 'Low',
       csw: hasAnyKeyword(lower, ['break-in', 'retail']) ? 3 : 2,
     };
@@ -452,7 +471,8 @@ export function incidentFromGeminiItem(item: any, displayLocation: string): Inci
     source_multiplier,
     recency_multiplier,
     source_url: typeof item?.source_url === 'string' ? item.source_url : undefined,
-    matched_zone: item?.matched_zone || `Within 200m · ${displayLocation}`,
+    matched_zone:
+      item?.matched_zone || `Within 200m · ${describeMatchedPlace(description, displayLocation)}`,
   };
 }
 
@@ -492,4 +512,174 @@ export function scoreIncidents(incidents: IncidentItem[]): {
   const risk_level: RiskLevel =
     safety_rating >= 4.0 ? 'Safe' : safety_rating >= 3.0 ? 'Moderate Risk' : 'High Risk';
   return { total_penalty, safety_rating, risk_level };
+}
+
+const VISITOR_TIP_BY_CRIME: Record<CrimeType, string> = {
+  Violent: 'Avoid walking alone here late at night.',
+  Theft: 'Keep your phone and wallet out of sight, especially in crowds.',
+  Burglary: 'Lock your vehicle and don’t leave bags visible inside.',
+  Nuisance: 'Steer clear of rowdy groups, especially after dark.',
+};
+
+const GENERAL_VISITOR_TIPS = [
+  'Stick to busy, well-lit main roads after dark.',
+  'Share your live location with someone you trust.',
+];
+
+export const MAX_VISITOR_TIPS = 3;
+export const MAX_VISITOR_TIP_LENGTH = 90;
+
+/**
+ * Short, plain-language visitor tips driven by which crime types were found,
+ * most common first, topped up with general advice.
+ */
+export function buildVisitorTips(incidents: IncidentItem[]): string[] {
+  if (incidents.length === 0) {
+    return [
+      'No recent crimes reported here. Normal caution is enough.',
+      'Keep valuables secure in busy spots.',
+      GENERAL_VISITOR_TIPS[0],
+    ];
+  }
+
+  const counts = new Map<CrimeType, number>();
+  for (const inc of incidents) {
+    counts.set(inc.crime_type, (counts.get(inc.crime_type) || 0) + 1);
+  }
+  const crimeTips = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([crimeType]) => VISITOR_TIP_BY_CRIME[crimeType])
+    .filter(Boolean);
+
+  return [...crimeTips, ...GENERAL_VISITOR_TIPS].slice(0, MAX_VISITOR_TIPS);
+}
+
+/** True when model-written tips are present and short enough to scan quickly. */
+export function areVisitorTipsConcise(tips: unknown): tips is string[] {
+  return (
+    Array.isArray(tips) &&
+    tips.length > 0 &&
+    tips.every(
+      (t) => typeof t === 'string' && t.trim().length > 0 && t.length <= MAX_VISITOR_TIP_LENGTH
+    )
+  );
+}
+
+// Words that name a kind of place, so "Pettah" + "Bus Stand" reads as one location
+const PLACE_NOUN_REGEX =
+  /^(bus|stand|station|terminal|railway|market|junction|road|rd|street|st|mawatha|lane|hospital|temple|kovil|mosque|church|park|bridge|fort|mall|bazaar|square|roundabout|harbour|port|school|college|grounds?)$/i;
+
+const GENERIC_PLACE_TOKENS = ['sri', 'lanka', 'city', 'district', 'province', 'western', 'downtown'];
+
+const normalizeWord = (word: string) => word.toLowerCase().replace(/[^a-z0-9]/g, '');
+const stripWordPunctuation = (word: string) => word.replace(/^[^\w]+|[^\w]+$/g, '');
+const toTitleCase = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+
+/**
+ * Human-readable location for an incident: the place as named in the headline
+ * (e.g. "Pettah Bus Stand"), falling back to the main word of the searched
+ * place (e.g. "Pettah") rather than the full search text.
+ */
+export function describeMatchedPlace(headline: string, placeHint: string): string {
+  const hintTokens = placeHint
+    .split(/[\s,]+/)
+    .map(normalizeWord)
+    .filter((t) => t.length >= 4 && !GENERIC_PLACE_TOKENS.includes(t));
+  const words = headline.split(/\s+/).filter(Boolean);
+
+  for (let i = 0; i < words.length; i++) {
+    if (!hintTokens.includes(normalizeWord(words[i]))) continue;
+
+    let lastPlaceWord = i;
+    for (let j = i + 1; j < words.length && j <= i + 4; j++) {
+      // Phrase ends at punctuation like "Pettah," or "Stand -"
+      if (/[,.:;!?]$/.test(words[j - 1])) break;
+      const word = stripWordPunctuation(words[j]);
+      if (!word) break;
+      if (PLACE_NOUN_REGEX.test(word)) lastPlaceWord = j;
+      else if (!/^[A-Z]/.test(word)) break;
+    }
+
+    return words
+      .slice(i, lastPlaceWord + 1)
+      .map((w) => toTitleCase(stripWordPunctuation(w)))
+      .join(' ');
+  }
+
+  return hintTokens.length > 0
+    ? toTitleCase(hintTokens[0])
+    : placeHint.split(',')[0].trim();
+}
+
+const HEADLINE_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'into', 'over', 'near', 'after', 'before',
+  'at', 'to', 'in', 'on', 'of', 'by', 'an', 'is', 'are', 'was', 'were', 'has', 'have',
+  'its', 'his', 'her', 'their', 'who', 'new', 'newly', 'video', 'news', 'report', 'reported',
+]);
+
+const stemWord = (word: string) =>
+  word.replace(/(ing|ed|es|s)$/, '').replace(/e$/, '');
+
+function headlineKeywords(headline: string, placeWords: Set<string>): Set<string> {
+  const keywords = new Set<string>();
+  for (const raw of headline.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length < 3 || HEADLINE_STOPWORDS.has(raw) || placeWords.has(raw)) continue;
+    keywords.add(stemWord(raw));
+  }
+  return keywords;
+}
+
+function placeWordsFor(incident: IncidentItem, placeHint: string): Set<string> {
+  const zone = (incident.matched_zone || '').replace(/^Within 200\s?m\s*·\s*/i, '');
+  return new Set(
+    `${zone} ${placeHint}`
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3)
+  );
+}
+
+/** True when two reports' publish times are close enough to be the same event. */
+function publishedAroundSameTime(a: IncidentItem, b: IncidentItem): boolean {
+  const daysA = parseRecencyTextToDays(a.recency);
+  const daysB = parseRecencyTextToDays(b.recency);
+  if (daysA === null || daysB === null) return true;
+  // Older reports only have month-level precision ("6 months ago"), so widen the window
+  const window = Math.max(14, 0.15 * Math.max(daysA, daysB));
+  return Math.abs(daysA - daysB) <= window;
+}
+
+/**
+ * True when two incidents look like different outlets reporting the same event:
+ * same crime type, similar timing, and most non-place headline keywords shared.
+ */
+export function isSameIncident(a: IncidentItem, b: IncidentItem, placeHint: string): boolean {
+  if (a.crime_type !== b.crime_type) return false;
+  if (!publishedAroundSameTime(a, b)) return false;
+
+  const wordsA = headlineKeywords(a.description, placeWordsFor(a, placeHint));
+  const wordsB = headlineKeywords(b.description, placeWordsFor(b, placeHint));
+  if (wordsA.size === 0 || wordsB.size === 0) return false;
+
+  let shared = 0;
+  for (const word of wordsA) if (wordsB.has(word)) shared++;
+  return shared >= 3 && shared / Math.min(wordsA.size, wordsB.size) >= 0.6;
+}
+
+/**
+ * Collapses multiple news reports of the same incident into one entry so it is
+ * listed and scored once. The first report (feed articles come first) is kept.
+ */
+export function dedupeIncidents(incidents: IncidentItem[], placeHint: string): IncidentItem[] {
+  const groups: IncidentItem[][] = [];
+  for (const incident of incidents) {
+    const group = groups.find((g) => g.some((member) => isSameIncident(member, incident, placeHint)));
+    if (group) group.push(incident);
+    else groups.push([incident]);
+  }
+
+  return groups.map((group) => {
+    const reportCount = group.reduce((n, item) => n + (item.report_count ?? 1), 0);
+    return reportCount > 1 ? { ...group[0], report_count: reportCount } : group[0];
+  });
 }

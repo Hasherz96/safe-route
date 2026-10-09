@@ -1,38 +1,184 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ShieldCheck,
-  RefreshCw,
   ExternalLink,
-  Navigation,
-  Calculator,
-  Filter,
-  Radar,
 } from 'lucide-react';
 import type {
   SafetyAnalysisResponse,
-  ComputedRouteDetails,
   PlaceSelection,
   CrimeType,
-  NearbyAreaContext,
+  IncidentItem,
 } from '../types/safety';
-import {
-  ENABLE_SRI_LANKA_PROTOTYPE,
-  SRI_LANKA_NATIONAL_OUTLETS,
-} from '../sriLankaPrototype/sriLankaConfig';
+import { parseRecencyTextToDays } from '../safetyScoring';
+
+const CRIME_CATEGORIES: CrimeType[] = ['Violent', 'Burglary', 'Theft', 'Nuisance'];
+
+const CRIME_CATEGORY_STYLES: Record<
+  CrimeType,
+  { text: string; dot: string; bg: string; border: string }
+> = {
+  Violent: {
+    text: 'text-rose-400',
+    dot: 'bg-rose-400',
+    bg: 'bg-rose-950/40',
+    border: 'border-rose-500/40',
+  },
+  Burglary: {
+    text: 'text-orange-400',
+    dot: 'bg-orange-400',
+    bg: 'bg-orange-950/40',
+    border: 'border-orange-500/40',
+  },
+  Theft: {
+    text: 'text-amber-400',
+    dot: 'bg-amber-400',
+    bg: 'bg-amber-950/40',
+    border: 'border-amber-500/40',
+  },
+  Nuisance: {
+    text: 'text-sky-400',
+    dot: 'bg-sky-400',
+    bg: 'bg-sky-950/40',
+    border: 'border-sky-500/40',
+  },
+};
+
+const CRIME_CATEGORY_PLURALS: Record<CrimeType, string> = {
+  Violent: 'violent crimes',
+  Burglary: 'burglaries',
+  Theft: 'thefts',
+  Nuisance: 'nuisance reports',
+};
+
+// Feed headlines often end with " - Daily Mirror"; drop that publisher suffix
+function stripSourceSuffix(headline: string, sourceName: string): string {
+  if (!sourceName) return headline;
+  const escaped = sourceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return headline.replace(new RegExp(`\\s+[-–—|]\\s*${escaped}\\s*$`, 'i'), '');
+}
+
+// "A, B and C" style list for readable sentences
+function formatList(items: string[]): string {
+  if (items.length <= 1) return items.join('');
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+interface AllCrimesSummaryProps {
+  incidents: IncidentItem[];
+  onSelectCategory: (category: CrimeType) => void;
+}
+
+// Glanceable overview shown on the "All" tab instead of the article list
+const AllCrimesSummary: React.FC<AllCrimesSummaryProps> = ({
+  incidents,
+  onSelectCategory,
+}) => {
+  if (incidents.length === 0) {
+    return (
+      <div className="py-6 px-4 flex flex-col items-center gap-2 text-center border border-dashed border-slate-800 rounded-xl">
+        <ShieldCheck className="w-6 h-6 text-emerald-400" />
+        <p className="text-sm font-medium text-slate-100">
+          No crimes reported nearby
+        </p>
+        <p className="text-xs text-slate-400">
+          We found no verified crime reports in the last 6 months.
+        </p>
+      </div>
+    );
+  }
+
+  const total = incidents.length;
+  const withDays = incidents.map((inc) => ({
+    inc,
+    days: parseRecencyTextToDays(inc.recency),
+  }));
+
+  const categories = CRIME_CATEGORIES.map((category) => {
+    const items = withDays.filter(({ inc }) => inc.crime_type === category);
+    const latest = items
+      .filter((item) => item.days !== null)
+      .sort((a, b) => (a.days as number) - (b.days as number))[0];
+    return {
+      category,
+      count: items.length,
+      latestText: latest?.inc.recency ?? items[0]?.inc.recency,
+    };
+  })
+    .filter((c) => c.count > 0)
+    .sort((a, b) => b.count - a.count);
+
+  const top = categories[0];
+  const headline =
+    categories.length === 1
+      ? `All ${CRIME_CATEGORY_PLURALS[top.category]}`
+      : top.count / total >= 0.5
+        ? `Mostly ${CRIME_CATEGORY_PLURALS[top.category]}`
+        : `A mix of ${formatList(
+            categories.map((c) => CRIME_CATEGORY_PLURALS[c.category])
+          )}`;
+
+  return (
+    <div className="p-4 rounded-2xl border border-slate-800 space-y-4">
+      {/* Plain-language takeaway */}
+      <p className="text-base font-semibold text-slate-100">{headline}</p>
+
+      {/* Category mix bar */}
+      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-800 gap-0.5">
+        {categories.map((c) => (
+          <div
+            key={c.category}
+            className={CRIME_CATEGORY_STYLES[c.category].dot}
+            style={{ width: `${(c.count / total) * 100}%` }}
+          />
+        ))}
+      </div>
+
+      {/* Per-category rows (tap to see those articles) */}
+      <div className="divide-y divide-slate-800/80">
+        {categories.map((c) => {
+          const style = CRIME_CATEGORY_STYLES[c.category];
+          return (
+            <button
+              key={c.category}
+              type="button"
+              onClick={() => onSelectCategory(c.category)}
+              className="w-full min-h-[48px] py-2.5 flex items-center gap-3 text-left hover:bg-slate-800/40 transition-colors"
+            >
+              <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${style.dot}`} />
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm font-medium text-slate-100">
+                  {c.category}
+                </span>
+                {c.latestText && (
+                  <span className="block text-xs text-slate-500">
+                    Latest {c.latestText}
+                  </span>
+                )}
+              </span>
+              <span
+                className={`font-mono-tabular text-lg font-semibold ${style.text}`}
+              >
+                {c.count}
+              </span>
+              <ChevronRight className="w-4 h-4 text-slate-600 shrink-0" />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 interface SafetyBottomSheetProps {
   expanded: boolean;
   onToggleExpand: (nextState?: boolean) => void;
   destination: PlaceSelection | null;
-  nearbyArea: NearbyAreaContext | null;
   safetyData: SafetyAnalysisResponse | null;
   isAnalyzing: boolean;
-  routeDetails: ComputedRouteDetails | null;
-  routeError: string | null;
-  onRefreshAnalysis: () => void;
-  onStartDirections: () => void;
 }
 
 function getScoreTheme(score: number) {
@@ -67,21 +213,18 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
   expanded,
   onToggleExpand,
   destination,
-  nearbyArea,
   safetyData,
   isAnalyzing,
-  routeDetails,
-  routeError,
-  onRefreshAnalysis,
-  onStartDirections,
 }) => {
   const [selectedCrimeFilter, setSelectedCrimeFilter] = useState<
     'ALL' | CrimeType
   >('ALL');
-  const [activeTab, setActiveTab] = useState<
-    'intelligence' | 'preprocessor' | 'directions' | 'formula'
-  >('intelligence');
   const [touchStartY, setTouchStartY] = useState<number | null>(null);
+
+  // New results always open on the "All" summary
+  useEffect(() => {
+    setSelectedCrimeFilter('ALL');
+  }, [safetyData]);
 
   const score = safetyData?.safety_rating ?? 5.0;
   const theme = getScoreTheme(score);
@@ -91,24 +234,6 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
     selectedCrimeFilter === 'ALL'
       ? incidents
       : incidents.filter((i) => i.crime_type === selectedCrimeFilter);
-
-  const totalPenalty =
-    safetyData?.total_penalty ??
-    Number(
-      incidents
-        .reduce((acc, item) => acc + (item.calculated_penalty || 0), 0)
-        .toFixed(2)
-    );
-
-  const audit = safetyData?.preprocessing_audit;
-  const streets200m =
-    nearbyArea?.surroundingStreets?.length
-      ? nearbyArea.surroundingStreets
-      : audit?.scanned_streets_200m || [];
-  const places200m =
-    nearbyArea?.nearbyPlaces?.length
-      ? nearbyArea.nearbyPlaces.map((p) => `${p.name} (${p.distanceMeters}m)`)
-      : audit?.scanned_places_200m || [];
 
   const handleTouchStart = (e: React.TouchEvent) => {
     setTouchStartY(e.touches[0].clientY);
@@ -124,11 +249,6 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
     }
     setTouchStartY(null);
   };
-
-  const radius = 38;
-  const circumference = Math.PI * radius;
-  const progressFraction = Math.max(0, Math.min(1, score / 5.0));
-  const strokeDashoffset = circumference * (1 - progressFraction);
 
   return (
     <div
@@ -202,40 +322,15 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
                     {safetyData?.risk_level || theme.badgeLabel}
                   </span>
                   <span aria-hidden="true">·</span>
-                  <span>200m Radius</span>
-                  <span aria-hidden="true">·</span>
-                  {routeDetails ? (
-                    <>
-                      <span className="font-mono-tabular text-slate-200 font-medium">
-                        {routeDetails.durationText}
-                      </span>
-                      <span aria-hidden="true">·</span>
-                      <span className="font-mono-tabular text-slate-300">
-                        {routeDetails.distanceText}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="font-mono-tabular">
-                      {incidents.length} verified{' '}
-                      {incidents.length === 1 ? 'crime' : 'crimes'}
-                    </span>
-                  )}
+                  <span className="font-mono-tabular">
+                    {incidents.length} verified{' '}
+                    {incidents.length === 1 ? 'crime' : 'crimes'}
+                  </span>
                 </div>
               </div>
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
-              {!routeDetails && destination && (
-                <button
-                  type="button"
-                  onClick={onStartDirections}
-                  className="min-h-[44px] px-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 transition-colors whitespace-nowrap"
-                >
-                  <Navigation className="w-3.5 h-3.5" />
-                  <span>Route</span>
-                </button>
-              )}
-
               <button
                 type="button"
                 onClick={() => onToggleExpand(!expanded)}
@@ -271,280 +366,99 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
             </div>
           ) : (
             <>
-              {/* Section Switcher Tabs */}
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-xl border border-slate-800/90 flex-1 overflow-x-auto custom-scrollbar">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('intelligence')}
-                    className={`flex-1 min-h-[38px] px-2.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-                      activeTab === 'intelligence'
-                        ? 'bg-slate-800 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    200m Crimes ({incidents.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('preprocessor')}
-                    className={`flex-1 min-h-[38px] px-2.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-                      activeTab === 'preprocessor'
-                        ? 'bg-slate-800 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    200m Filter Audit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('directions')}
-                    className={`flex-1 min-h-[38px] px-2.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-                      activeTab === 'directions'
-                        ? 'bg-slate-800 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Route {routeDetails ? `(${routeDetails.durationText})` : ''}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('formula')}
-                    className={`flex-1 min-h-[38px] px-2.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-                      activeTab === 'formula'
-                        ? 'bg-slate-800 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Math
-                  </button>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={onRefreshAnalysis}
-                  title="Re-run 200m neighborhood scan and crime preprocessor"
-                  className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white flex items-center justify-center transition-colors shrink-0"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </button>
-              </div>
-
-              {activeTab === 'intelligence' && (
-                <>
-                  {/* Safety Gauge & Executive Overview */}
-                  <div className="p-4 rounded-2xl bg-slate-950/90 border border-slate-800/90 flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                    <div className="flex items-center gap-4 shrink-0">
-                      <div className="relative w-24 h-16 flex flex-col items-center justify-end">
-                        <svg
-                          viewBox="0 0 100 58"
-                          className="w-24 h-14 overflow-visible"
-                        >
-                          <path
-                            d="M 12 48 A 38 38 0 0 1 88 48"
-                            fill="none"
-                            stroke="#1e293b"
-                            strokeWidth="8"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M 12 48 A 38 38 0 0 1 88 48"
-                            fill="none"
-                            stroke={theme.stroke}
-                            strokeWidth="8"
-                            strokeLinecap="round"
-                            strokeDasharray={circumference}
-                            strokeDashoffset={strokeDashoffset}
-                            className="transition-all duration-300"
-                          />
-                        </svg>
-                        <div className="absolute bottom-0 flex items-baseline gap-0.5">
-                          <span
-                            className={`font-mono-tabular text-xl font-bold ${theme.text}`}
-                          >
-                            {score.toFixed(1)}
-                          </span>
-                          <span className="font-mono-tabular text-[11px] text-slate-500">
-                            /5.0
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="sm:hidden">
-                        <div className={`text-sm font-semibold ${theme.text}`}>
-                          {safetyData?.risk_level || theme.badgeLabel}
-                        </div>
-                        <div className="text-xs text-slate-400 font-mono-tabular mt-0.5">
-                          Total Penalty: -{totalPenalty.toFixed(2)}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex-1 space-y-1.5">
-                      <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400">
-                        <span className={`font-semibold ${theme.text}`}>
-                          {safetyData?.risk_level || theme.badgeLabel}
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <span className="font-mono-tabular">
-                          Base 5.0 − ({totalPenalty.toFixed(2)} / 5) ={' '}
-                          {score.toFixed(1)}
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-200 leading-relaxed">
-                        {safetyData?.summary ||
-                          'Select any destination to map its 200m surrounding streets and evaluate verified crime incidents.'}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Compact 200m Neighboring Streets Bar */}
-                  {streets200m.length > 0 && (
-                    <div className="py-2.5 px-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 text-xs text-slate-300 flex items-center gap-2 flex-wrap">
-                      <Radar className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span className="text-slate-400">
-                        200m Corridors Scanned:
-                      </span>
-                      <span className="text-slate-200 font-medium">
-                        {streets200m.join(' · ')}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Missing News Data Notice */}
-                  {safetyData?.missing_news_notice && (
-                    <div className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-start gap-2.5 text-xs text-emerald-200">
-                      <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                      <div className="leading-relaxed">
-                        {safetyData.missing_news_notice}
-                      </div>
-                    </div>
-                  )}
-
                   {/* Incident Breakdown Section */}
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <h3 className="text-sm font-semibold text-slate-100">
-                        01. Verified 200m Crime Breakdown
-                      </h3>
-                      <span className="text-xs text-slate-400 font-mono-tabular">
-                        {filteredIncidents.length} of {incidents.length} shown
-                      </span>
-                    </div>
-
-                    {incidents.length > 0 && (
-                      <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-xl border border-slate-800/80 overflow-x-auto custom-scrollbar">
-                        {(
-                          [
-                            'ALL',
-                            'Violent',
-                            'Burglary',
-                            'Theft',
-                            'Nuisance',
-                          ] as const
-                        ).map((filterKey) => {
-                          const active = selectedCrimeFilter === filterKey;
-                          return (
-                            <button
-                              key={filterKey}
-                              type="button"
-                              onClick={() => setSelectedCrimeFilter(filterKey)}
-                              className={`min-h-[34px] px-3 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-                                active
-                                  ? 'bg-slate-800 text-white shadow-sm'
-                                  : 'text-slate-400 hover:text-slate-200'
-                              }`}
-                            >
-                              {filterKey === 'ALL'
-                                ? 'All Categories'
-                                : filterKey}
-                            </button>
-                          );
-                        })}
-                      </div>
+                  <div
+                    className={`space-y-3 ${
+                      selectedCrimeFilter !== 'ALL' ? 'p-4 pt-2 rounded-2xl border border-slate-800' : ''
+                    }`}
+                  >
+                    {selectedCrimeFilter !== 'ALL' && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCrimeFilter('ALL')}
+                        className="min-h-[36px] -ml-1 pr-2 flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                        <span>All crimes</span>
+                        <span aria-hidden="true">·</span>
+                        <span className={CRIME_CATEGORY_STYLES[selectedCrimeFilter].text}>
+                          {selectedCrimeFilter}
+                        </span>
+                      </button>
                     )}
 
-                    {filteredIncidents.length === 0 ? (
+                    {selectedCrimeFilter === 'ALL' ? (
+                      <AllCrimesSummary
+                        incidents={incidents}
+                        onSelectCategory={setSelectedCrimeFilter}
+                      />
+                    ) : filteredIncidents.length === 0 ? (
                       <div className="py-6 text-center text-xs text-slate-400 border border-dashed border-slate-800 rounded-xl">
                         No verified criminal offenses inside the 200m radius
                         match this category filter.
                       </div>
                     ) : (
-                      <div className="divide-y divide-slate-800/80 border-t border-b border-slate-800/80">
+                      <div className="divide-y divide-slate-800/80">
                         {filteredIncidents.map((inc, index) => {
-                          const severityColor =
-                            inc.severity_impact === 'High'
-                              ? 'text-rose-400'
-                              : inc.severity_impact === 'Medium'
-                                ? 'text-amber-400'
-                                : 'text-sky-400';
+                          const zoneLabel = inc.matched_zone
+                            ?.replace(/^Within 200\s?m\s*·\s*/i, '')
+                            .trim();
 
                           return (
                             <div
                               key={`${inc.crime_type}-${index}`}
-                              className="py-3.5 flex items-start justify-between gap-4"
+                              className="py-3.5 space-y-1"
                             >
-                              <div className="space-y-1 min-w-0 flex-1">
-                                {/* Unboxed quiet metadata kicker */}
-                                <div className="flex items-center gap-1.5 text-xs text-slate-400 flex-wrap">
-                                  <span
-                                    className={`font-semibold ${severityColor}`}
-                                  >
-                                    {inc.crime_type}
-                                  </span>
-                                  <span aria-hidden="true">·</span>
-                                  <span>{inc.severity_impact} Impact</span>
-                                  <span aria-hidden="true">·</span>
-                                  <span>{inc.recency}</span>
-                                  {inc.matched_zone && (
-                                    <>
-                                      <span aria-hidden="true">·</span>
-                                      <span className="text-emerald-300/90">
-                                        {inc.matched_zone}
-                                      </span>
-                                    </>
-                                  )}
-                                </div>
-
-                                {/* Headline / Description */}
-                                <p className="text-sm font-medium text-slate-100 leading-snug">
-                                  {inc.description}
-                                </p>
-
-                                {/* Source Attribution Line */}
-                                <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                                  <span>{inc.source_type}</span>
-                                  <span aria-hidden="true">/</span>
-                                  <span className="text-slate-300">
-                                    {inc.source_name}
-                                  </span>
-                                  {inc.source_url && (
-                                    <>
-                                      <span aria-hidden="true">·</span>
-                                      <a
-                                        href={inc.source_url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-1 text-emerald-400 hover:underline"
-                                      >
-                                        <span>Source</span>
-                                        <ExternalLink className="w-3 h-3" />
-                                      </a>
-                                    </>
-                                  )}
-                                </div>
+                              {/* Unboxed quiet metadata kicker */}
+                              <div className="flex items-center gap-1.5 text-xs text-slate-400 flex-wrap">
+                                <span
+                                  className={`font-semibold ${
+                                    CRIME_CATEGORY_STYLES[inc.crime_type]?.text ??
+                                    'text-slate-300'
+                                  }`}
+                                >
+                                  {inc.crime_type}
+                                </span>
+                                <span aria-hidden="true">·</span>
+                                <span>{inc.recency}</span>
+                                {zoneLabel && (
+                                  <>
+                                    <span aria-hidden="true">·</span>
+                                    <span>
+                                      {zoneLabel}
+                                    </span>
+                                  </>
+                                )}
                               </div>
 
-                              {/* Right-aligned Tabular Penalty Readout */}
-                              <div className="text-right shrink-0">
-                                <div className="font-mono-tabular text-sm font-semibold text-rose-400">
-                                  -{Number(inc.calculated_penalty).toFixed(2)}
-                                </div>
-                                <div className="text-[11px] text-slate-500 font-mono-tabular">
-                                  {inc.csw_weight
-                                    ? `${inc.csw_weight}×${inc.source_multiplier ?? 1}×${inc.recency_multiplier ?? 0.7}`
-                                    : 'penalty'}
-                                </div>
+                              {/* Headline / Description */}
+                              <p className="text-sm font-medium text-slate-100 leading-snug">
+                                {stripSourceSuffix(inc.description, inc.source_name)}
+                              </p>
+
+                              {/* Source Attribution Line */}
+                              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                                <span>{inc.source_type}</span>
+                                {inc.source_url && (
+                                  <>
+                                    <span aria-hidden="true">·</span>
+                                    <a
+                                      href={inc.source_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 text-slate-400 hover:text-slate-200 hover:underline"
+                                    >
+                                      <span>Source</span>
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  </>
+                                )}
+                                {(inc.report_count ?? 1) > 1 && (
+                                  <>
+                                    <span aria-hidden="true">·</span>
+                                    <span>{inc.report_count} reports</span>
+                                  </>
+                                )}
                               </div>
                             </div>
                           );
@@ -554,11 +468,11 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
                   </div>
 
                   {/* Pedestrian & Visitor Safety Recommendations */}
-                  <div className="space-y-2.5">
+                  <div className="p-4 rounded-2xl border border-slate-800 space-y-2.5">
                     <h3 className="text-sm font-semibold text-slate-100">
-                      02. Pedestrian & Visitor Recommendations
+                      Visitor Recommendations
                     </h3>
-                    <div className="divide-y divide-slate-800/60 border-t border-b border-slate-800/60">
+                    <div className="divide-y divide-slate-800/60">
                       {(safetyData?.safety_recommendations || []).map(
                         (rec, idx) => (
                           <div
@@ -574,279 +488,6 @@ export const SafetyBottomSheet: React.FC<SafetyBottomSheetProps> = ({
                       )}
                     </div>
                   </div>
-                </>
-              )}
-
-              {activeTab === 'preprocessor' && (
-                <div className="space-y-5">
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <Filter className="w-4 h-4 text-emerald-400" />
-                      <h3 className="text-sm font-semibold text-slate-100">
-                        01. 200m Google Maps Neighborhood Discovery
-                      </h3>
-                    </div>
-                    <p className="text-xs text-slate-400 leading-relaxed">
-                      Before querying crime feeds, Google Maps{' '}
-                      <span className="font-mono-tabular text-slate-300">
-                        Place.searchNearby
-                      </span>{' '}
-                      maps all streets and landmarks within a 200-meter radius of
-                      your searched destination:
-                    </p>
-                  </div>
-
-                  <div className="divide-y divide-slate-800/80 border-t border-b border-slate-800/80 text-xs">
-                    <div className="py-2.5 flex flex-col gap-1">
-                      <span className="text-slate-400">
-                        Adjacent Streets in 200m Radius
-                      </span>
-                      <span className="text-slate-200 font-medium">
-                        {streets200m.length > 0
-                          ? streets200m.join(' · ')
-                          : 'Primary destination street block'}
-                      </span>
-                    </div>
-                    <div className="py-2.5 flex flex-col gap-1">
-                      <span className="text-slate-400">
-                        Neighboring Landmarks in 200m Radius ({places200m.length}
-                        )
-                      </span>
-                      <span className="text-slate-200">
-                        {places200m.length > 0
-                          ? places200m.slice(0, 8).join(' · ')
-                          : 'Scanning nearby establishments...'}
-                      </span>
-                    </div>
-                    {ENABLE_SRI_LANKA_PROTOTYPE && (
-                      <div className="py-2.5 flex flex-col gap-1">
-                        <span className="text-emerald-400 font-medium">
-                          Sri Lanka National News Outlets Scope (13 Outlets)
-                        </span>
-                        <span className="text-slate-200 leading-relaxed">
-                          {SRI_LANKA_NATIONAL_OUTLETS.map(
-                            (o) => o.displayName
-                          ).join(' · ')}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Preprocessor Filtering Statistics */}
-                  <div className="space-y-2.5">
-                    <h3 className="text-sm font-semibold text-slate-100">
-                      02. News Preprocessor & False-Positive Rejection Log
-                    </h3>
-                    <p className="text-xs text-slate-400 leading-relaxed">
-                      Candidate news headlines are filtered to reject movie/film
-                      shoots (e.g., Spider-Man filming locations), photo shoots,
-                      sports shooting stats, and incidents outside the 200m
-                      perimeter:
-                    </p>
-
-                    <div className="divide-y divide-slate-800/80 border-t border-b border-slate-800/80 text-xs">
-                      <div className="py-2 flex justify-between">
-                        <span className="text-slate-300">
-                          Raw News & Community Articles Scanned
-                        </span>
-                        <span className="font-mono-tabular font-semibold text-slate-100">
-                          {audit?.raw_candidates_scanned ?? 0}
-                        </span>
-                      </div>
-                      <div className="py-2 flex justify-between">
-                        <span className="text-slate-300">
-                          Rejected Non-Crime (Film Shoots, Sports, Metaphors)
-                        </span>
-                        <span className="font-mono-tabular font-semibold text-amber-400">
-                          {audit?.rejected_non_crime_count ?? 0}
-                        </span>
-                      </div>
-                      <div className="py-2 flex justify-between">
-                        <span className="text-slate-300">
-                          Rejected Outside 200m Neighboring Perimeter
-                        </span>
-                        <span className="font-mono-tabular font-semibold text-slate-400">
-                          {audit?.rejected_outside_radius_count ?? 0}
-                        </span>
-                      </div>
-                      <div className="py-2 flex justify-between">
-                        <span className="text-slate-300">
-                          Verified 200m Criminal Incidents Scored
-                        </span>
-                        <span className="font-mono-tabular font-semibold text-emerald-400">
-                          {audit?.verified_crime_count ?? incidents.length}
-                        </span>
-                      </div>
-                    </div>
-
-                    {audit?.rejected_examples &&
-                      audit.rejected_examples.length > 0 && (
-                        <div className="space-y-2 pt-2">
-                          <div className="text-xs font-semibold text-slate-300">
-                            Sample Rejected Headlines (Excluded from Score):
-                          </div>
-                          <div className="divide-y divide-slate-800/60 border-t border-b border-slate-800/60">
-                            {audit.rejected_examples.map((ex, i) => (
-                              <div key={i} className="py-2 space-y-0.5 text-xs">
-                                <div className="text-slate-300 line-through decoration-slate-600">
-                                  {ex.title}
-                                </div>
-                                <div className="text-amber-400/90">
-                                  Reason: {ex.reason}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'directions' && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-100">
-                      Turn-by-Turn Route Corridor
-                    </h3>
-                    {routeDetails && (
-                      <div className="flex items-center gap-1.5 text-xs text-slate-300 font-mono-tabular">
-                        <span>{routeDetails.durationText}</span>
-                        <span aria-hidden="true">·</span>
-                        <span>{routeDetails.distanceText}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {routeError && (
-                    <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-500/40 text-xs text-rose-200">
-                      {routeError}
-                    </div>
-                  )}
-
-                  {!routeDetails ? (
-                    <div className="py-8 text-center space-y-3 border border-dashed border-slate-800 rounded-2xl p-4">
-                      <p className="text-xs text-slate-400">
-                        Enable Turn-by-Turn Directions to compute the optimal
-                        route from your origin or current Android GPS
-                        coordinates.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={onStartDirections}
-                        className="min-h-[44px] px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold inline-flex items-center gap-2 transition-colors"
-                      >
-                        <Navigation className="w-4 h-4" />
-                        <span>Calculate Route Now</span>
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-slate-800/80 border-t border-b border-slate-800/80">
-                      {routeDetails.steps.map((step, idx) => (
-                        <div
-                          key={idx}
-                          className="py-3 flex items-start justify-between gap-3"
-                        >
-                          <div className="flex items-baseline gap-3 min-w-0">
-                            <span className="font-mono-tabular text-xs font-semibold text-emerald-400 shrink-0">
-                              {String(idx + 1).padStart(2, '0')}
-                            </span>
-                            <span
-                              className="text-sm text-slate-200 leading-snug"
-                              dangerouslySetInnerHTML={{
-                                __html: step.instruction,
-                              }}
-                            />
-                          </div>
-                          <div className="text-right font-mono-tabular text-xs text-slate-400 shrink-0 whitespace-nowrap">
-                            {step.distanceText}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {activeTab === 'formula' && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Calculator className="w-4 h-4 text-emerald-400" />
-                    <h3 className="text-sm font-semibold text-slate-100">
-                      SafeRoute Scoring Methodology
-                    </h3>
-                  </div>
-
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    Every 200m zone begins at a Base Score of{' '}
-                    <span className="font-mono-tabular font-semibold text-white">
-                      5.0
-                    </span>
-                    . Verified criminal incidents within the 200m perimeter are
-                    weighted by severity, source credibility, and recency:
-                  </p>
-
-                  <div className="divide-y divide-slate-800/80 border-t border-b border-slate-800/80 text-xs">
-                    <div className="py-2.5 flex justify-between gap-4">
-                      <span className="text-slate-300">
-                        Violent / High Severity (Homicide, Shooting, Armed
-                        Robbery)
-                      </span>
-                      <span className="font-mono-tabular text-rose-400 font-semibold shrink-0">
-                        CSW 10–12
-                      </span>
-                    </div>
-                    <div className="py-2.5 flex justify-between gap-4">
-                      <span className="text-slate-300">
-                        Property / Moderate (Burglary, Auto Theft, Assault)
-                      </span>
-                      <span className="font-mono-tabular text-amber-400 font-semibold shrink-0">
-                        CSW 5–7
-                      </span>
-                    </div>
-                    <div className="py-2.5 flex justify-between gap-4">
-                      <span className="text-slate-300">
-                        Minor Crimes (Petty Theft, Pickpocketing, Break-in)
-                      </span>
-                      <span className="font-mono-tabular text-sky-400 font-semibold shrink-0">
-                        CSW 2–3
-                      </span>
-                    </div>
-                    <div className="py-2.5 flex justify-between gap-4">
-                      <span className="text-slate-300">
-                        Nuisance / Low Risk (Loitering, Noise, Intoxication)
-                      </span>
-                      <span className="font-mono-tabular text-slate-400 font-semibold shrink-0">
-                        CSW 1
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5 text-xs text-slate-300">
-                    <div>
-                      <span className="text-slate-400">
-                        Source Multipliers:
-                      </span>{' '}
-                      <span className="font-mono-tabular">
-                        Local/National News = 1.0 · Social Media = 0.5
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400">
-                        Recency Multipliers:
-                      </span>{' '}
-                      <span className="font-mono-tabular">
-                        &lt;7d = 1.0 · 8–30d = 0.7 · 31–90d = 0.4 · 91–180d =
-                        0.1 · &gt;180d excluded
-                      </span>
-                    </div>
-                    <div className="pt-2 font-mono-tabular text-emerald-300">
-                      Final Score = Max(1.0, 5.0 − (Total Penalty / 5)) ={' '}
-                      {score.toFixed(1)}
-                    </div>
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>

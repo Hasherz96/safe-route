@@ -8,15 +8,23 @@ import { GoogleGenAI } from '@google/genai';
 import { ENABLE_SRI_LANKA_PROTOTYPE } from './src/sriLankaPrototype/sriLankaConfig';
 import {
   buildSriLankaNationalNewsQueries,
+  distinctivePlaceWords,
   extractSriLankaLocalityTokens,
   fetchArticlePublishDate,
   fetchDirectSriLankaRssFeeds,
   fuzzyLocalityMatch,
   getSriLankaGeminiPromptAppendix,
+  isBroadAreaName,
   matchSriLankaNationalOutlet,
 } from './src/sriLankaPrototype/sriLankaNewsEngine';
 import {
+  areVisitorTipsConcise,
+  MAX_VISITOR_TIPS,
+  buildVisitorTips,
   computeRecencyFromDate,
+  dedupeIncidents,
+  describeMatchedPlace,
+  findMatchingArticle,
   incidentFromArticle,
   MAX_ARTICLE_AGE_DAYS,
   mergeIncidents,
@@ -94,11 +102,17 @@ Respond ONLY with a valid JSON object matching this exact schema:
     }
   ],
   "safety_recommendations": [
-    "Practical safety advice 1",
-    "Practical safety advice 2",
-    "Practical safety advice 3"
+    "Keep your phone and wallet out of sight, especially in crowds.",
+    "Avoid walking alone here late at night.",
+    "Stick to busy, well-lit main roads after dark."
   ]
-}${ENABLE_SRI_LANKA_PROTOTYPE ? getSriLankaGeminiPromptAppendix() : ''}`;
+}
+
+### VISITOR TIPS (safety_recommendations):
+- Exactly 3 tips for someone visiting this area, most important first.
+- Each tip is ONE short sentence of at most 12 words, starting with an action verb.
+- Base the tips on the crime types actually found (e.g. theft -> guard phone/wallet; violent -> avoid being alone at night).
+- Use plain everyday language. No jargon (e.g. "200m perimeter", "corridors", "telemetry", "situational awareness"), no statistics, no counts, no scores.${ENABLE_SRI_LANKA_PROTOTYPE ? getSriLankaGeminiPromptAppendix() : ''}`;
 
 /**
  * STAGE 2 PREPROCESSOR:
@@ -119,15 +133,19 @@ function verify200mZoneMatch(
     .trim()
     .toLowerCase();
 
-  // Check direct target place name match or fuzzy locality match
+  // Check direct target place name match or fuzzy locality match. A bare city
+  // name ("Kandy") is too broad to place a story within 200m; a fuller phrase
+  // ("Kandy City Centre") is fine.
+  const targetIsSpecific =
+    cleanTarget.split(/\s+/).length >= 2 || !isBroadAreaName(cleanTarget);
   if (cleanTarget && cleanTarget.length >= 3) {
     if (
-      lowerTitle.includes(cleanTarget) ||
+      (targetIsSpecific && lowerTitle.includes(cleanTarget)) ||
       (ENABLE_SRI_LANKA_PROTOTYPE && fuzzyLocalityMatch(title, cleanTarget))
     ) {
       return {
         matched: true,
-        matchedZone: `Within 200m · ${locationName.split(',')[0].trim()}`,
+        matchedZone: `Within 200m · ${describeMatchedPlace(title, locationName)}`,
       };
     }
   }
@@ -145,6 +163,7 @@ function verify200mZoneMatch(
     if (
       (cleanStreet.length >= 4 && lowerTitle.includes(cleanStreet)) ||
       (streetBase.length >= 4 &&
+        !isBroadAreaName(streetBase) &&
         new RegExp(`\\b${streetBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(
           lowerTitle
         )) ||
@@ -161,7 +180,9 @@ function verify200mZoneMatch(
   for (const placeName of nearbyPlaceNames) {
     const cleanPlace = placeName.toLowerCase().trim();
     if (
-      (cleanPlace.length >= 4 && lowerTitle.includes(cleanPlace)) ||
+      (cleanPlace.length >= 4 &&
+        !isBroadAreaName(cleanPlace) &&
+        lowerTitle.includes(cleanPlace)) ||
       (ENABLE_SRI_LANKA_PROTOTYPE && fuzzyLocalityMatch(title, placeName))
     ) {
       return {
@@ -175,6 +196,7 @@ function verify200mZoneMatch(
   if (ENABLE_SRI_LANKA_PROTOTYPE) {
     const localities = extractSriLankaLocalityTokens(locationName, address);
     for (const locToken of localities) {
+      if (isBroadAreaName(locToken)) continue;
       const lowerLoc = locToken.toLowerCase();
       if (
         (lowerLoc.length >= 4 && lowerTitle.includes(lowerLoc)) ||
@@ -182,20 +204,16 @@ function verify200mZoneMatch(
       ) {
         return {
           matched: true,
-          matchedZone: `Within 200m · ${locToken}`,
+          matchedZone: `Within 200m · ${describeMatchedPlace(title, locToken)}`,
         };
       }
     }
   }
 
   // Also check individual significant tokens of the searched place name
-  const targetTokens = cleanTarget
-    .split(/\s+/)
-    .filter(
-      (t) =>
-        t.length >= 4 &&
-        !['park', 'city', 'downtown', 'north', 'south', 'east', 'west', 'sri', 'lanka'].includes(t)
-    );
+  const targetTokens = distinctivePlaceWords(cleanTarget).filter(
+    (t) => t !== 'downtown'
+  );
   if (
     targetTokens.length > 0 &&
     targetTokens.every(
@@ -204,7 +222,7 @@ function verify200mZoneMatch(
   ) {
     return {
       matched: true,
-      matchedZone: `Within 200m · ${locationName.split(',')[0].trim()}`,
+      matchedZone: `Within 200m · ${describeMatchedPlace(title, locationName)}`,
     };
   }
 
@@ -588,7 +606,10 @@ function buildAnalysisFromVerifiedArticles(
   articles: RawFeedArticle[],
   preprocessingAudit: any
 ) {
-  const incident_breakdown = articles.map(incidentFromArticle);
+  const incident_breakdown = dedupeIncidents(
+    articles.map(incidentFromArticle),
+    locationLabel
+  );
   const { total_penalty, safety_rating, risk_level } =
     scoreIncidents(incident_breakdown);
 
@@ -609,24 +630,7 @@ function buildAnalysisFromVerifiedArticles(
     summary = `200m radius scan around ${locationLabel} (${streetsCount} adjacent streets & ${placesCount} nearby landmarks) verified ${incident_breakdown.length} actual crime reports (${violentCount} violent, ${propertyCount} property/theft) after rejecting ${preprocessingAudit.rejected_non_crime_count + preprocessingAudit.rejected_outside_radius_count} non-crime or out-of-zone articles.`;
   }
 
-  const safety_recommendations =
-    safety_rating < 3.0
-      ? [
-          `High-risk 200m zone: ${violentCount} verified violent incident(s) reported on adjacent corridors near ${locationLabel}. Avoid unlit blocks late at night.`,
-          'Use main transit entrances and well-patrolled commercial frontages within the 200m perimeter.',
-          'Keep valuables concealed and share live route telemetry when walking.',
-        ]
-      : safety_rating < 4.0
-        ? [
-            `Moderate caution advised within the 200m radius of ${locationLabel} due to recent property and street-level offenses.`,
-            'Do not leave bags or electronics visible in parked vehicles on surrounding side streets.',
-            'Remain on active pedestrian blocks after dusk.',
-          ]
-        : [
-            '200m perimeter shows low verified criminal activity; maintain standard urban situational awareness.',
-            'Keep mobile devices secured near transit stops and intersections.',
-            'Prefer well-lit sidewalks along primary streets after evening hours.',
-          ];
+  const safety_recommendations = buildVisitorTips(incident_breakdown);
 
   const grounding_sources = articles
     .filter((a) => Boolean(a.link))
@@ -749,8 +753,6 @@ async function startServer() {
       locationName,
       address,
       coordinates,
-      originName,
-      travelMode,
       nearbyArea,
     } = req.body || {};
 
@@ -794,9 +796,6 @@ async function startServer() {
       coordinates && typeof coordinates.lat === 'number'
         ? ` (Center Coordinates: ${coordinates.lat.toFixed(5)}, ${coordinates.lng.toFixed(5)}, Radius: 200m)`
         : '';
-    const routeContext = originName
-      ? ` The user is requesting a ${travelMode || 'WALKING'} route from "${originName}" to "${targetLabel}".`
-      : '';
 
     const neighborhoodContext =
       surroundingStreets.length > 0 || nearbyPlaceNames.length > 0
@@ -816,7 +815,7 @@ async function startServer() {
             .join('\n')
         : '\n\nNo verified crime articles matched after preprocessing out film shoots, sports metaphors, and out-of-radius stories.';
 
-    const prompt = `Analyze the 200-meter radius crime intelligence around: "${targetLabel}"${coordContext}.${routeContext}${neighborhoodContext}${verifiedFeedContext}
+    const prompt = `Analyze the 200-meter radius crime intelligence around: "${targetLabel}"${coordContext}.${neighborhoodContext}${verifiedFeedContext}
 
 Remember:
 1. Reject any non-crime stories (e.g., movie/film shooting locations like Spider-Man, photo shoots, sports shooting, etc.).
@@ -866,6 +865,20 @@ Return the strict JSON object only.`;
             }
             return false;
           }
+
+          // Incidents Gemini found on its own must pass the same 200m check as feed articles
+          if (findMatchingArticle(item, preprocessed.verifiedArticles)) return true;
+          const zone = verify200mZoneMatch(
+            String(item?.description || ''),
+            locationName || address,
+            surroundingStreets,
+            nearbyPlaceNames,
+            address
+          );
+          if (!zone.matched) {
+            preprocessingAudit.rejected_outside_radius_count++;
+            return false;
+          }
           return true;
         });
 
@@ -885,9 +898,12 @@ Return the strict JSON object only.`;
 
         // Otherwise score every verified 200m article from its own metadata, plus
         // any additional incidents Gemini found that aren't one of those articles
-        const normalizedIncidents = mergeIncidents(
-          postFilteredIncidents,
-          preprocessed.verifiedArticles,
+        const normalizedIncidents = dedupeIncidents(
+          mergeIncidents(
+            postFilteredIncidents,
+            preprocessed.verifiedArticles,
+            displayLocation
+          ),
           displayLocation
         );
 
@@ -927,12 +943,13 @@ Return the strict JSON object only.`;
               `200m radius analysis around ${displayLocation} completed across ${surroundingStreets.length} adjacent streets.`
           ),
           incident_breakdown: normalizedIncidents,
-          safety_recommendations: Array.isArray(parsed?.safety_recommendations)
-            ? parsed.safety_recommendations.map(String)
-            : [
-                'Stay on well-lit primary thoroughfares within the 200m zone after dusk.',
-                'Keep valuables out of sight near transit entrances and intersections.',
-              ],
+          safety_recommendations: areVisitorTipsConcise(
+            parsed?.safety_recommendations
+          )
+            ? parsed.safety_recommendations
+                .slice(0, MAX_VISITOR_TIPS)
+                .map((t: string) => t.trim())
+            : buildVisitorTips(normalizedIncidents),
           total_penalty,
           grounding_sources: groundingSources.slice(0, 8),
           preprocessing_audit: preprocessingAudit,

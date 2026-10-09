@@ -186,11 +186,21 @@ function levenshteinDistance(a: string, b: string): number {
 /**
  * Performs fuzzy locality matching between a crime headline and a target locality token/name.
  * Accounts for Sinhala transliterations, sub-token overlap, and minor spelling differences.
+ *
+ * Only distinctive words count: generic place words ("Restaurant", "Centre") and
+ * whole-city names ("Kandy", "Colombo") say nothing about whether a story happened
+ * within 200m. A name made only of such words ("Kandy City Centre") must appear
+ * as an exact phrase.
  */
 export function fuzzyLocalityMatch(headline: string, targetLocality: string): boolean {
   const lowerHeadline = headline.toLowerCase();
   const lowerTarget = targetLocality.toLowerCase().trim();
   if (!lowerTarget || lowerTarget.length < 3) return false;
+
+  const targetWords = distinctivePlaceWords(lowerTarget);
+  if (targetWords.length === 0) {
+    return lowerTarget.split(/\s+/).length >= 2 && lowerHeadline.includes(lowerTarget);
+  }
 
   // 1. Direct substring match
   if (lowerHeadline.includes(lowerTarget)) return true;
@@ -201,27 +211,59 @@ export function fuzzyLocalityMatch(headline: string, targetLocality: string): bo
     if (lowerHeadline.includes(alt.toLowerCase())) return true;
   }
 
-  // 3. Token-by-token comparison & fuzzy Levenshtein check
+  // 3. Every distinctive word of the name (e.g. "Devon" in "Devon Restaurant")
+  // must match a headline word, allowing small spelling differences
   const headlineWords = lowerHeadline
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
     .filter((w) => w.length >= 4);
 
-  const targetWords = lowerTarget
+  return targetWords.every((tw) =>
+    headlineWords.some(
+      (hw) =>
+        hw === tw ||
+        (tw.length >= 5 && hw.length >= 5 && levenshteinDistance(tw, hw) <= 2)
+    )
+  );
+}
+
+// Place-type words that appear in many unrelated place names and headlines
+const GENERIC_PLACE_WORDS = new Set([
+  'restaurant', 'hotel', 'cafe', 'bakery', 'shop', 'store', 'stores', 'super',
+  'supermarket', 'market', 'bank', 'branch', 'station', 'railway', 'police',
+  'hospital', 'school', 'college', 'temple', 'kovil', 'church', 'mosque',
+  'road', 'street', 'mawatha', 'lane', 'avenue', 'place', 'junction', 'park',
+  'building', 'tower', 'centre', 'center', 'city', 'mall', 'plaza', 'house',
+  'office', 'limited', 'company', 'pharmacy', 'salon', 'hall', 'ground',
+  'grounds', 'stand', 'terminal', 'cross', 'main', 'central', 'north', 'south',
+  'east', 'west', 'town', 'district', 'lake', 'beach', 'bridge', 'national',
+  'province', 'sri', 'lanka',
+]);
+
+// Cities and districts: a story that only names one of these could have
+// happened anywhere in that city, so it is not evidence of a 200m match
+const BROAD_AREA_NAMES = new Set([
+  'colombo', 'kandy', 'galle', 'jaffna', 'negombo', 'kurunegala', 'matara',
+  'anuradhapura', 'polonnaruwa', 'ratnapura', 'badulla', 'batticaloa',
+  'trincomalee', 'kalutara', 'gampaha', 'hambantota', 'nuwara', 'eliya',
+  'kegalle', 'puttalam', 'chilaw', 'ampara', 'vavuniya', 'mannar',
+  'kilinochchi', 'mullaitivu', 'monaragala', 'moneragala', 'matale',
+  'moratuwa', 'panadura', 'kalmunai', 'dambulla', 'bandarawela', 'hatton',
+]);
+
+/** True for a whole city or district name such as "Kandy" or "Colombo". */
+export function isBroadAreaName(name: string): boolean {
+  const words = name.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => BROAD_AREA_NAMES.has(w) || GENERIC_PLACE_WORDS.has(w));
+}
+
+/** Words of a place name that actually identify it, e.g. "devon" in "Devon Restaurant". */
+export function distinctivePlaceWords(name: string): string[] {
+  return name
+    .toLowerCase()
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
-    .filter((w) => w.length >= 4);
-
-  for (const tw of targetWords) {
-    for (const hw of headlineWords) {
-      if (hw === tw) return true;
-      if (tw.length >= 5 && hw.length >= 5) {
-        if (levenshteinDistance(tw, hw) <= 2) return true;
-      }
-    }
-  }
-
-  return false;
+    .filter((w) => w.length >= 4 && !GENERIC_PLACE_WORDS.has(w) && !BROAD_AREA_NAMES.has(w));
 }
 
 /**
@@ -399,9 +441,6 @@ export const SRI_LANKA_CRIME_KEYWORDS = {
     'three-wheeler theft',
     'extortion',
     'kappam',
-    'stf raid',
-    'special task force',
-    'organized crime',
   ],
 };
 

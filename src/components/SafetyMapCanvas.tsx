@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Map,
   AdvancedMarker,
@@ -6,7 +6,6 @@ import {
   useMapsLibrary,
 } from '@vis.gl/react-google-maps';
 import {
-  Navigation,
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
@@ -21,9 +20,6 @@ import type {
   Coordinates,
   PlaceSelection,
   SafetyAnalysisResponse,
-  TravelModeOption,
-  ComputedRouteDetails,
-  RouteStepInfo,
   NearbyAreaContext,
   NearbyPlaceItem,
 } from '../types/safety';
@@ -34,18 +30,13 @@ import {
 } from '../sriLankaPrototype/sriLankaConfig';
 
 interface SafetyMapCanvasProps {
-  origin: PlaceSelection | null;
   destination: PlaceSelection | null;
-  directionsEnabled: boolean;
-  travelMode: TravelModeOption;
   safetyData: SafetyAnalysisResponse | null;
   isAnalyzing: boolean;
   onNearbyAreaDiscovered: (
     target: PlaceSelection,
     nearbyArea: NearbyAreaContext
   ) => void;
-  onRouteComputed: (route: ComputedRouteDetails | null) => void;
-  onRouteError: (err: string | null) => void;
   onMarkerPress: () => void;
   onQuotaExceeded: () => void;
 }
@@ -119,38 +110,25 @@ function extractStreetNameFromAddress(address: string): string | null {
 }
 
 export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
-  origin,
   destination,
-  directionsEnabled,
-  travelMode,
   safetyData,
   isAnalyzing,
   onNearbyAreaDiscovered,
-  onRouteComputed,
-  onRouteError,
   onMarkerPress,
   onQuotaExceeded,
 }) => {
   const map = useMap();
   const mapsLib = useMapsLibrary('maps');
   const placesLib = useMapsLibrary('places');
-  const routesLib = useMapsLibrary('routes');
 
-  const polylinesRef = useRef<any[]>([]);
   const radiusCircleRef = useRef<any | null>(null);
   const lastScannedPlaceKeyRef = useRef<string>('');
 
   const [mapTypeId, setMapTypeId] = useState<'roadmap' | 'hybrid'>('roadmap');
-  const [isComputingRoute, setIsComputingRoute] = useState(false);
   const [isScanning200m, setIsScanning200m] = useState(false);
   const [nearbyPlaces200m, setNearbyPlaces200m] = useState<NearbyPlaceItem[]>(
     []
   );
-
-  const clearPolylines = useCallback(() => {
-    polylinesRef.current.forEach((poly) => poly.setMap(null));
-    polylinesRef.current = [];
-  }, []);
 
   // Draw & update the 200-meter radius Circle overlay on Google Map
   useEffect(() => {
@@ -197,12 +175,13 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
     if (lastScannedPlaceKeyRef.current === placeKey) return;
     lastScannedPlaceKeyRef.current = placeKey;
 
-    if (map && (!directionsEnabled || !origin)) {
+    if (map) {
       map.panTo(destination.location);
       map.setZoom(16); // Zoom 16 frames the 200m radius circle clearly
     }
 
     let isCancelled = false;
+    let isCompleted = false;
     setIsScanning200m(true);
 
     const discover200mNeighborhood = async () => {
@@ -272,6 +251,7 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
       }
 
       if (isCancelled) return;
+      isCompleted = true;
 
       discoveredPlaces.sort((a, b) => a.distanceMeters - b.distanceMeters);
       setNearbyPlaces200m(discoveredPlaces);
@@ -288,258 +268,17 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
 
     return () => {
       isCancelled = true;
+      // An interrupted scan (e.g. StrictMode's double effect run) never reported
+      // its results, so forget the key to let the next run scan this place again
+      if (!isCompleted && lastScannedPlaceKeyRef.current === placeKey) {
+        lastScannedPlaceKeyRef.current = '';
+      }
     };
   }, [
     destination,
     placesLib,
     map,
-    directionsEnabled,
-    origin,
     onNearbyAreaDiscovered,
-    onQuotaExceeded,
-  ]);
-
-  // Compute route using modern Routes API (google.maps.routes.Route.computeRoutes)
-  useEffect(() => {
-    clearPolylines();
-
-    if (
-      !map ||
-      !mapsLib ||
-      !routesLib ||
-      !directionsEnabled ||
-      !origin ||
-      !destination
-    ) {
-      onRouteComputed(null);
-      onRouteError(null);
-      return;
-    }
-
-    let isCancelled = false;
-    setIsComputingRoute(true);
-    onRouteError(null);
-
-    const accent = getSafetyAccent(safetyData?.safety_rating);
-
-    const runComputeRoute = async () => {
-      try {
-        const RouteClass = (routesLib as any).Route;
-        if (!RouteClass || typeof RouteClass.computeRoutes !== 'function') {
-          throw new Error('Google Maps Routes library not available.');
-        }
-
-        const request: any = {
-          origin: origin.location,
-          destination: destination.location,
-          travelMode: travelMode,
-          fields: [
-            'path',
-            'legs',
-            'distanceMeters',
-            'durationMillis',
-            'localizedValues',
-            'viewport',
-          ],
-        };
-
-        const response = await RouteClass.computeRoutes(request);
-        if (isCancelled) return;
-
-        const computedRoute = response?.routes?.[0];
-        if (!computedRoute) {
-          onRouteError('No turn-by-turn route found between these points.');
-          onRouteComputed(null);
-          setIsComputingRoute(false);
-          return;
-        }
-
-        // Extract path coordinates
-        const rawPath: Coordinates[] = [];
-        if (Array.isArray(computedRoute.path)) {
-          for (const pt of computedRoute.path) {
-            const lat = typeof pt.lat === 'function' ? pt.lat() : pt.lat;
-            const lng = typeof pt.lng === 'function' ? pt.lng() : pt.lng;
-            if (typeof lat === 'number' && typeof lng === 'number') {
-              rawPath.push({ lat, lng });
-            }
-          }
-        }
-
-        // Draw outer casing polyline + inner safety-colored route polyline
-        const PolylineClass = (mapsLib as any).Polyline;
-        if (rawPath.length > 0 && PolylineClass) {
-          const outerPoly = new PolylineClass({
-            path: rawPath,
-            geodesic: true,
-            strokeColor: '#090d16',
-            strokeOpacity: 0.85,
-            strokeWeight: 9,
-            map,
-            zIndex: 10,
-          });
-
-          const innerPoly = new PolylineClass({
-            path: rawPath,
-            geodesic: true,
-            strokeColor: accent.hex,
-            strokeOpacity: 0.95,
-            strokeWeight: 5,
-            map,
-            zIndex: 11,
-          });
-
-          polylinesRef.current = [outerPoly, innerPoly];
-        } else if (typeof computedRoute.createPolylines === 'function') {
-          const sdkPolylines: any[] = computedRoute.createPolylines();
-          sdkPolylines.forEach((p) => {
-            p.setOptions({
-              strokeColor: accent.hex,
-              strokeWeight: 5,
-              map,
-            });
-          });
-          polylinesRef.current = sdkPolylines;
-        }
-
-        // Fit map bounds to route viewport
-        if (computedRoute.viewport) {
-          map.fitBounds(computedRoute.viewport, {
-            top: 140,
-            bottom: 240,
-            left: 48,
-            right: 48,
-          });
-        }
-
-        const leg = computedRoute.legs?.[0];
-        const steps: RouteStepInfo[] = Array.isArray(leg?.steps)
-          ? leg.steps.slice(0, 12).map((step: any, idx: number) => ({
-              instruction:
-                step?.instructions ||
-                step?.navigationInstruction?.instructions ||
-                `Segment ${idx + 1} toward destination`,
-              distanceText:
-                step?.localizedValues?.distance ||
-                (step?.distanceMeters
-                  ? `${Math.round(step.distanceMeters)} m`
-                  : ''),
-              durationText:
-                step?.localizedValues?.staticDuration ||
-                (step?.staticDurationMillis
-                  ? `${Math.max(1, Math.round(step.staticDurationMillis / 60000))} min`
-                  : ''),
-            }))
-          : [];
-
-        const distanceMeters = computedRoute.distanceMeters || 0;
-        const durationMillis = computedRoute.durationMillis || 0;
-
-        const distanceText =
-          computedRoute.localizedValues?.distance ||
-          (distanceMeters >= 1000
-            ? `${(distanceMeters / 1000).toFixed(1)} km`
-            : `${Math.round(distanceMeters)} m`);
-
-        const durationText =
-          computedRoute.localizedValues?.duration ||
-          `${Math.max(1, Math.round(durationMillis / 60000))} min`;
-
-        onRouteComputed({
-          distanceText,
-          durationText,
-          distanceMeters,
-          durationMillis,
-          path: rawPath,
-          steps,
-          travelMode,
-        });
-      } catch (err: any) {
-        if (isCancelled) return;
-        const msg = String(err?.message || err || '');
-        if (
-          msg.includes('429') ||
-          msg.includes('RESOURCE_EXHAUSTED') ||
-          msg.includes('OVER_QUERY_LIMIT') ||
-          msg.includes('Quota')
-        ) {
-          onQuotaExceeded();
-        }
-        console.warn('Route computation fallback activated:', msg);
-
-        // Fallback straight-line corridor route when Routes API returns PERMISSION_DENIED or fails
-        if (origin && destination) {
-          const PolylineClass = (mapsLib as any)?.Polyline;
-          const fallbackPath = [origin.location, destination.location];
-          if (PolylineClass) {
-            const outerPoly = new PolylineClass({
-              path: fallbackPath,
-              geodesic: true,
-              strokeColor: '#090d16',
-              strokeOpacity: 0.85,
-              strokeWeight: 7,
-              map,
-              zIndex: 10,
-            });
-            const innerPoly = new PolylineClass({
-              path: fallbackPath,
-              geodesic: true,
-              strokeColor: accent.hex,
-              strokeOpacity: 0.95,
-              strokeWeight: 4,
-              map,
-              zIndex: 11,
-            });
-            polylinesRef.current = [outerPoly, innerPoly];
-          }
-
-          const distM = haversineDistanceMeters(origin.location, destination.location);
-          const durMin = Math.max(1, Math.round(distM / 80));
-          onRouteComputed({
-            distanceText: distM >= 1000 ? `${(distM / 1000).toFixed(1)} km` : `${distM} m`,
-            durationText: `${durMin} min`,
-            distanceMeters: distM,
-            durationMillis: durMin * 60000,
-            path: fallbackPath,
-            steps: [
-              {
-                instruction: `Direct corridor from ${origin.name} to ${destination.name}`,
-                distanceText: `${distM} m`,
-                durationText: `${durMin} min`,
-              },
-            ],
-            travelMode,
-          });
-        } else {
-          onRouteError(
-            'Could not calculate turn-by-turn directions for the selected mode.'
-          );
-          onRouteComputed(null);
-        }
-      } finally {
-        if (!isCancelled) {
-          setIsComputingRoute(false);
-        }
-      }
-    };
-
-    runComputeRoute();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [
-    map,
-    mapsLib,
-    routesLib,
-    directionsEnabled,
-    origin,
-    destination,
-    travelMode,
-    safetyData?.safety_rating,
-    clearPolylines,
-    onRouteComputed,
-    onRouteError,
     onQuotaExceeded,
   ]);
 
@@ -556,9 +295,6 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
     if (destination) {
       map.panTo(destination.location);
       map.setZoom(16);
-    } else if (origin) {
-      map.panTo(origin.location);
-      map.setZoom(15);
     }
   };
 
@@ -595,22 +331,6 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
             </div>
           </AdvancedMarker>
         ))}
-
-        {/* Origin / Current GPS Marker */}
-        {origin && (
-          <AdvancedMarker
-            position={origin.location}
-            title={`Origin: ${origin.name}`}
-          >
-            <div className="relative flex items-center justify-center">
-              <span className="absolute w-8 h-8 rounded-full bg-sky-500/30 animate-ping" />
-              <div className="relative flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/95 border border-sky-400/70 shadow-lg text-xs font-medium text-sky-200 whitespace-nowrap">
-                <Navigation className="w-3.5 h-3.5 text-sky-400 fill-sky-400/30" />
-                <span className="max-w-[110px] truncate">{origin.name}</span>
-              </div>
-            </div>
-          </AdvancedMarker>
-        )}
 
         {/* Destination Custom Safety Score Map Callout Pin */}
         {destination && (
@@ -722,15 +442,11 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
         </div>
       </div>
 
-      {/* Live 200m Scan / Route Status Indicator */}
-      {(isScanning200m || isComputingRoute) && (
+      {/* Live 200m Scan Status Indicator */}
+      {isScanning200m && (
         <div className="absolute top-36 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-lg bg-slate-900/95 border border-slate-700 shadow-lg flex items-center gap-2 text-xs text-slate-200 whitespace-nowrap">
           <Radar className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
-          <span>
-            {isScanning200m
-              ? 'Scanning 200m neighboring streets via Google Maps...'
-              : 'Calculating turn-by-turn corridor...'}
-          </span>
+          <span>Scanning 200m neighboring streets via Google Maps...</span>
         </div>
       )}
     </div>

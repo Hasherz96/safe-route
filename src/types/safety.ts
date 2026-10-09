@@ -19,6 +19,8 @@ export interface IncidentItem {
   recency_multiplier?: number;
   source_url?: string;
   matched_zone?: string;
+  /** How many news reports describe this same incident (set when duplicates are merged). */
+  report_count?: number;
 }
 
 export interface GroundingSource {
@@ -70,8 +72,6 @@ export interface SafetyAnalysisResponse {
   analyzed_at?: string;
 }
 
-export type TravelModeOption = 'WALKING' | 'DRIVING' | 'BICYCLING' | 'TRANSIT';
-
 export interface Coordinates {
   lat: number;
   lng: number;
@@ -82,20 +82,4 @@ export interface PlaceSelection {
   address: string;
   location: Coordinates;
   placeId?: string;
-}
-
-export interface RouteStepInfo {
-  instruction: string;
-  distanceText: string;
-  durationText: string;
-}
-
-export interface ComputedRouteDetails {
-  distanceText: string;
-  durationText: string;
-  distanceMeters: number;
-  durationMillis: number;
-  path: Coordinates[];
-  steps: RouteStepInfo[];
-  travelMode: TravelModeOption;
 }

@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractPublishDateFromHtml } from './sriLankaNewsEngine';
+import {
+  distinctivePlaceWords,
+  extractPublishDateFromHtml,
+  fuzzyLocalityMatch,
+  isBroadAreaName,
+} from './sriLankaNewsEngine';
 
 describe('extractPublishDateFromHtml', () => {
   it('reads JSON-LD datePublished (Ada Derana article pages)', () => {
@@ -33,5 +38,51 @@ describe('extractPublishDateFromHtml', () => {
       '2026-09-30T12:00:00.000Z'
     );
     assert.equal(extractPublishDateFromHtml('<html><body>No dates here</body></html>'), null);
+  });
+});
+
+describe('fuzzyLocalityMatch', () => {
+  const kalutaraHeadline = "More details emerge in Kalutara restaurant owner's murder";
+
+  it('does not match on a generic word like "restaurant"', () => {
+    assert.equal(fuzzyLocalityMatch(kalutaraHeadline, 'Devon Restaurant'), false);
+  });
+
+  it('does not match the search name on generic words like "city" or "centre"', () => {
+    assert.equal(fuzzyLocalityMatch('Fire at Galle city centre shop', 'Kandy City Centre'), false);
+  });
+
+  it('still matches when the distinctive part of the name appears', () => {
+    assert.equal(fuzzyLocalityMatch('Robbery at Devon restaurant in Kandy', 'Devon Restaurant'), true);
+    assert.equal(fuzzyLocalityMatch('Pickpocket arrested at Pettah bus stand', 'Pettah'), true);
+  });
+
+  it('still tolerates small spelling differences', () => {
+    assert.equal(fuzzyLocalityMatch('Theft reported on Olcot Mawatha', 'Olcott Mawatha'), true);
+  });
+});
+
+describe('city-wide mentions are not a 200m match', () => {
+  it('does not match a story that only names the city', () => {
+    assert.equal(fuzzyLocalityMatch('Tractor driver killed, two injured in Kandy crash', 'Kandy City Centre'), false);
+    assert.equal(fuzzyLocalityMatch('23-year-old woman found dead in Kandy', 'Kandy'), false);
+    assert.equal(fuzzyLocalityMatch('Man stabbed near Kandy clock tower', 'Kandy City Centre'), false);
+  });
+
+  it('still matches the full place name as a phrase', () => {
+    assert.equal(fuzzyLocalityMatch('Robbery reported at Kandy City Centre mall', 'Kandy City Centre'), true);
+  });
+
+  it('still matches neighbourhoods and streets', () => {
+    assert.equal(fuzzyLocalityMatch('Pickpocket arrested at Pettah bus stand', 'Pettah'), true);
+    assert.equal(fuzzyLocalityMatch('Chain snatched on Dalada Veediya', 'Sri Dalada Veediya'), true);
+  });
+
+  it('identifies broad area names', () => {
+    assert.equal(isBroadAreaName('Kandy'), true);
+    assert.equal(isBroadAreaName('Colombo'), true);
+    assert.equal(isBroadAreaName('Pettah'), false);
+    assert.deepEqual(distinctivePlaceWords('Kandy City Centre'), []);
+    assert.deepEqual(distinctivePlaceWords('Devon Restaurant'), ['devon']);
   });
 });

@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  areVisitorTipsConcise,
+  buildVisitorTips,
+  dedupeIncidents,
+  describeMatchedPlace,
   findMatchingArticle,
   MAX_ARTICLE_AGE_DAYS,
   mergeIncidents,
@@ -204,5 +208,146 @@ describe('findMatchingArticle', () => {
 describe('scoreIncidents', () => {
   it('returns 5.0 Safe with no incidents', () => {
     assert.deepEqual(scoreIncidents([]), { total_penalty: 0, safety_rating: 5.0, risk_level: 'Safe' });
+  });
+});
+
+describe('visitor tips', () => {
+  it('leads with advice for the most common crime type', () => {
+    const incidents = [
+      mergeIncidents([], [article({ title: 'Phone theft on Galle Road bus' })], 'Pettah')[0],
+      mergeIncidents([], [article({ title: 'Pickpocket arrested at Pettah bus stand' })], 'Pettah')[0],
+      mergeIncidents([], [article({ title: 'Man stabbed near Pettah bus stand' })], 'Pettah')[0],
+    ];
+    const tips = buildVisitorTips(incidents);
+    assert.equal(tips.length, 3);
+    assert.match(tips[0], /phone and wallet/);
+    assert.match(tips[1], /alone/);
+  });
+
+  it('gives reassuring tips when no crimes were found', () => {
+    assert.match(buildVisitorTips([])[0], /No recent crimes/);
+  });
+
+  it('keeps every built-in tip short', () => {
+    assert.ok(areVisitorTipsConcise(buildVisitorTips([])));
+  });
+
+  it('rejects missing or wordy model tips', () => {
+    assert.equal(areVisitorTipsConcise(undefined), false);
+    assert.equal(areVisitorTipsConcise([]), false);
+    assert.equal(
+      areVisitorTipsConcise([
+        'High-risk 200m zone: 1 verified violent incident(s) reported on adjacent corridors near Pettah, Colombo. Avoid unlit blocks late at night.',
+      ]),
+      false
+    );
+    assert.equal(areVisitorTipsConcise(['Avoid walking alone here late at night.']), true);
+  });
+});
+
+describe('describeMatchedPlace', () => {
+  const search = 'Pettah Colombo Sri Lanka';
+
+  it('uses the place named in the headline', () => {
+    assert.equal(
+      describeMatchedPlace('Suspect arrested over damage to newly reopened Pettah Bus Stand - Daily Mirror', search),
+      'Pettah Bus Stand'
+    );
+    assert.equal(
+      describeMatchedPlace('Suspect arrested over damage to Pettah Central Bus Stand facilities', search),
+      'Pettah Central Bus Stand'
+    );
+  });
+
+  it('includes lowercase place words', () => {
+    assert.equal(describeMatchedPlace('Man stabbed near Pettah bus stand', search), 'Pettah Bus Stand');
+  });
+
+  it('does not run on into the rest of a title-case headline', () => {
+    assert.equal(describeMatchedPlace('Pettah Police Arrest Pickpocket', search), 'Pettah');
+    assert.equal(describeMatchedPlace('Fire in Pettah, traders evacuated', search), 'Pettah');
+  });
+
+  it('falls back to the main word of the search, not the full search text', () => {
+    assert.equal(describeMatchedPlace('Chain snatching reported nearby', search), 'Pettah');
+  });
+});
+
+describe('dedupeIncidents', () => {
+  const incidentFor = (title: string, recency = '6 months ago') => ({
+    ...mergeIncidents([], [article({ title, recencyText: recency, matchedZone: 'Within 200m · Pettah Bus Stand' })], 'Pettah')[0],
+    recency,
+  });
+
+  it('merges several outlets reporting the same incident', () => {
+    const incidents = dedupeIncidents(
+      [
+        incidentFor('Suspect arrested over damage to newly reopened Pettah Bus Stand - Daily Mirror'),
+        incidentFor('Suspect arrested over damage to Pettah Central Bus Stand facilities'),
+        incidentFor('Suspect arrested for damaging property at renovated Pettah Central Bus Stand'),
+      ],
+      'Pettah, Colombo'
+    );
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0].report_count, 3);
+  });
+
+  it('keeps different crimes at the same place separate', () => {
+    const incidents = dedupeIncidents(
+      [incidentFor('Phone stolen at Pettah Bus Stand'), incidentFor('Bag stolen at Pettah Bus Stand')],
+      'Pettah, Colombo'
+    );
+    assert.equal(incidents.length, 2);
+  });
+
+  it('keeps similar reports from different times separate', () => {
+    const incidents = dedupeIncidents(
+      [
+        incidentFor('Suspect arrested over damage to Pettah Bus Stand', '2 weeks ago'),
+        incidentFor('Suspect arrested over damage to Pettah Bus Stand', '6 months ago'),
+      ],
+      'Pettah, Colombo'
+    );
+    assert.equal(incidents.length, 2);
+  });
+
+  it('scores a merged incident once', () => {
+    const one = incidentFor('Suspect arrested over damage to Pettah Bus Stand');
+    const merged = dedupeIncidents([one, incidentFor('Suspect arrested over damage to Pettah Central Bus Stand facilities')], 'Pettah');
+    assert.deepEqual(scoreIncidents(merged), scoreIncidents([one]));
+  });
+});
+
+describe('crime type classification', () => {
+  const classify = (title: string) => preprocessAndClassifyHeadline(title);
+
+  it('does not count accidents as crimes', () => {
+    assert.equal(classify('Tractor driver killed, two injured in Kandy crash').isCrime, false);
+    assert.equal(classify('Two dead after bus collided with lorry near Kadawatha').isCrime, false);
+  });
+
+  it('still counts deliberate harm that mentions a crash', () => {
+    assert.equal(classify('Driver stabbed after crash in Pettah').crime_type, 'Violent');
+  });
+
+  it('labels assaults as violent, not burglary', () => {
+    assert.equal(
+      classify('Student hospitalised after being assaulted by prefects of a leading Kandy school').crime_type,
+      'Violent'
+    );
+  });
+
+  it('labels robbery and extortion as theft, burglary as burglary', () => {
+    assert.equal(classify('Shop robbed in Maradana').crime_type, 'Theft');
+    assert.equal(classify("Police uncover real story behind viral 'extortion' video").crime_type, 'Theft');
+    assert.equal(classify('House burglary reported in Wellawatte').crime_type, 'Burglary');
+  });
+
+  it('labels property damage as nuisance', () => {
+    assert.equal(classify('Suspect arrested over damage to newly reopened Pettah Bus Stand').crime_type, 'Nuisance');
+  });
+
+  it('does not treat a vague arrest as a crime', () => {
+    assert.equal(classify('Suspect arrested for obstructing police duties during Kandy Esala procession').isCrime, false);
   });
 });
