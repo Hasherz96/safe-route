@@ -351,3 +351,76 @@ describe('crime type classification', () => {
     assert.equal(classify('Suspect arrested for obstructing police duties during Kandy Esala procession').isCrime, false);
   });
 });
+
+describe('severity weights', () => {
+  const classify = (title: string) => preprocessAndClassifyHeadline(title);
+
+  it('counts sexual offences and child abuse as the most severe violent crimes', () => {
+    for (const title of [
+      'Girl sexually abused at Galle Face',
+      'Man arrested for rape of teenager in Pettah',
+      'Tuition teacher held for molesting student in Maradana',
+      'Child abuse case reported in Borella',
+      'Woman sexually assaulted near Fort station',
+    ]) {
+      const result = classify(title);
+      assert.equal(result.isCrime, true, title);
+      assert.equal(result.crime_type, 'Violent', title);
+      assert.equal(result.csw, 12, title);
+    }
+  });
+
+  it('weighs abduction like murder', () => {
+    assert.equal(classify('Police probe abduction of 13-year-old girl at Galle Face').csw, 12);
+    assert.equal(classify('Businessman kidnapped in Kollupitiya').csw, 12);
+    assert.equal(classify('Man murdered in Kotahena').csw, 12);
+  });
+
+  it('weighs armed robbery below a shooting', () => {
+    assert.equal(classify('Armed robbery at Maradana jewellery shop').csw, 8);
+    assert.equal(classify('Shots fired near Borella junction, police investigating').csw, 10);
+    assert.equal(classify('Armed robbery suspect shot by police in Wattala').csw, 10);
+  });
+
+  it('gives every word form of an offence the same weight', () => {
+    assert.equal(classify('Shop robbed in Maradana').csw, classify('Robbery at Maradana shop').csw);
+    assert.equal(classify('Smash and grab at Colombo store').csw, classify('Smash-and-grab at Colombo store').csw);
+    assert.equal(classify('Tourist attacked in Pettah').csw, classify('Tourist assaulted in Pettah').csw);
+    assert.equal(classify('Thieves broke into a car in Pettah').csw, classify('Car break-in reported in Pettah').csw);
+  });
+
+  it('does not treat deadly or fatal non-crime stories as violent crime', () => {
+    assert.equal(classify('Deadly dengue outbreak spreads in Colombo').isCrime, false);
+    assert.equal(classify('Fatal fire broke out at Pettah warehouse').isCrime, false);
+    assert.equal(classify('Farmer killed by wild elephant in Anuradhapura').isCrime, false);
+  });
+
+  it('still counts fatal violence', () => {
+    assert.equal(classify('Fatal stabbing near Pettah bus stand').csw, 12);
+  });
+});
+
+describe('allegations and disputes', () => {
+  const classify = (title: string) => preprocessAndClassifyHeadline(title);
+
+  it('does not count allegations, denials or disputes as incidents', () => {
+    for (const title of [
+      'MP Sujith Sanjay Perera refutes assault allegations by MP Archchuna Ramanathan',
+      'Police deny assault on suspect in custody',
+      'Minister slams opposition over robbery claims',
+      'Former MP files defamation lawsuit over assault remarks',
+    ]) {
+      assert.equal(classify(title).isCrime, false, title);
+    }
+  });
+
+  it('still counts a dispute story that reports an actual incident', () => {
+    assert.equal(classify('Man who denied stabbing neighbour arrested in Pettah').isCrime, true);
+    assert.equal(classify('Police deny cover-up as robbery victim hospitalised in Borella').isCrime, true);
+  });
+
+  it('still counts victims reporting what happened to them', () => {
+    assert.equal(classify('Woman alleges she was assaulted by bus conductor in Pettah').isCrime, true);
+    assert.equal(classify('Former MP accused of assaulting bus conductor in Pettah').isCrime, true);
+  });
+});

@@ -238,6 +238,9 @@ const GENERIC_PLACE_WORDS = new Set([
   'grounds', 'stand', 'terminal', 'cross', 'main', 'central', 'north', 'south',
   'east', 'west', 'town', 'district', 'lake', 'beach', 'bridge', 'national',
   'province', 'sri', 'lanka',
+  // Business-name words
+  'sons', 'brothers', 'bros', 'enterprises', 'traders', 'trading', 'holdings',
+  'private', 'industries', 'agency', 'agencies', 'services', 'group',
 ]);
 
 // Cities and districts: a story that only names one of these could have
@@ -251,19 +254,48 @@ const BROAD_AREA_NAMES = new Set([
   'moratuwa', 'panadura', 'kalmunai', 'dambulla', 'bandarawela', 'hatton',
 ]);
 
+// Common surnames: in a headline they almost always name a person ("MP Sujith
+// Perera"), even when a place is named after one ("Perera & Sons", "Perera Mawatha")
+const COMMON_SURNAMES = new Set([
+  'perera', 'silva', 'fernando', 'fernandopulle', 'dias', 'mendis', 'peiris', 'pieris',
+  'jayasinghe', 'jayasuriya', 'jayawardena', 'jayawardene', 'wickramasinghe',
+  'wickremesinghe', 'wickremasinghe', 'rajapaksa', 'rajapakse', 'bandara',
+  'dissanayake', 'dissanayaka', 'gunawardena', 'gunawardana', 'gunasekara',
+  'gunasekera', 'senanayake', 'ranasinghe', 'herath', 'kumara', 'rathnayake',
+  'ratnayake', 'karunaratne', 'weerasinghe', 'wijesinghe', 'wijeratne',
+  'samarasinghe', 'liyanage', 'amarasinghe', 'abeysekera', 'abeysekara', 'premadasa',
+  'kumaratunga', 'bandaranaike', 'munasinghe', 'nanayakkara', 'rodrigo', 'cooray',
+  'soysa', 'pathirana', 'seneviratne', 'ekanayake', 'gamage', 'hettiarachchi',
+  'edirisinghe', 'sirisena', 'ramanathan', 'mohamed', 'mohammed', 'ahamed',
+]);
+
 /** True for a whole city or district name such as "Kandy" or "Colombo". */
 export function isBroadAreaName(name: string): boolean {
   const words = name.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean);
   return words.length > 0 && words.every((w) => BROAD_AREA_NAMES.has(w) || GENERIC_PLACE_WORDS.has(w));
 }
 
-/** Words of a place name that actually identify it, e.g. "devon" in "Devon Restaurant". */
+/**
+ * Words of a place name that actually identify it, e.g. "devon" in "Devon
+ * Restaurant". Excludes generic place words, city names and surnames.
+ */
 export function distinctivePlaceWords(name: string): string[] {
   return name
     .toLowerCase()
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
-    .filter((w) => w.length >= 4 && !GENERIC_PLACE_WORDS.has(w) && !BROAD_AREA_NAMES.has(w));
+    .filter(
+      (w) =>
+        w.length >= 4 &&
+        !GENERIC_PLACE_WORDS.has(w) &&
+        !BROAD_AREA_NAMES.has(w) &&
+        !COMMON_SURNAMES.has(w)
+    );
+}
+
+/** True when a name has at least one word that pins down a specific place. */
+export function hasDistinctivePlaceWord(name: string): boolean {
+  return distinctivePlaceWords(name).length > 0;
 }
 
 /**

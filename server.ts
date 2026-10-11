@@ -14,9 +14,14 @@ import {
   fetchDirectSriLankaRssFeeds,
   fuzzyLocalityMatch,
   getSriLankaGeminiPromptAppendix,
-  isBroadAreaName,
+  hasDistinctivePlaceWord,
   matchSriLankaNationalOutlet,
 } from './src/sriLankaPrototype/sriLankaNewsEngine';
+import {
+  fetchArticleDetails,
+  findIncidentDateInText,
+  isPlausibleIncidentDate,
+} from './src/articleDates';
 import {
   areVisitorTipsConcise,
   MAX_VISITOR_TIPS,
@@ -61,8 +66,11 @@ Your task is to evaluate the real-time pedestrian and visitor safety within a st
 ### STRICT SCORING ALGORITHM & METHODOLOGY:
 1. Base Score: 5.0 (Extremely Safe)
 2. Crime Severity Weights (CSW):
-   - Violent / High Severity (Murder, Homicide, Shooting, Stabbing, Kidnapping, Armed Robbery, Carjacking): CSW = 10 to 12
-   - Property / Moderate Severity (Burglary, Auto Theft, Aggravated Assault, Robbery): CSW = 5 to 7
+   - Most severe (Murder, Homicide, Rape, Sexual Assault/Abuse, Molestation, Child Abuse, Kidnapping, Abduction): CSW = 12
+   - Violent / High Severity (Shooting, Stabbing, Sword/Weapon Attack): CSW = 10
+   - Armed threat without injury (Armed Robbery, Robbery at Gunpoint, Carjacking): CSW = 8
+   - Property / Moderate Severity (Burglary, Auto Theft, Assault, Robbery): CSW = 5 to 7
+   - Accidents, disease outbreaks, animal attacks and natural disasters are NOT crimes, even if "deadly" or "fatal"
    - Minor Crimes (Petty Theft, Shoplifting, Pickpocketing, Vandalism, Vehicle Break-in, Larceny): CSW = 2 to 3
    - Nuisance / Low Risk (Public Intoxication, Loitering, Noise, Trespassing, Disorderly Conduct): CSW = 1
 3. Multipliers:
@@ -137,7 +145,7 @@ function verify200mZoneMatch(
   // name ("Kandy") is too broad to place a story within 200m; a fuller phrase
   // ("Kandy City Centre") is fine.
   const targetIsSpecific =
-    cleanTarget.split(/\s+/).length >= 2 || !isBroadAreaName(cleanTarget);
+    cleanTarget.split(/\s+/).length >= 2 || hasDistinctivePlaceWord(cleanTarget);
   if (cleanTarget && cleanTarget.length >= 3) {
     if (
       (targetIsSpecific && lowerTitle.includes(cleanTarget)) ||
@@ -163,7 +171,7 @@ function verify200mZoneMatch(
     if (
       (cleanStreet.length >= 4 && lowerTitle.includes(cleanStreet)) ||
       (streetBase.length >= 4 &&
-        !isBroadAreaName(streetBase) &&
+        hasDistinctivePlaceWord(streetBase) &&
         new RegExp(`\\b${streetBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(
           lowerTitle
         )) ||
@@ -181,7 +189,7 @@ function verify200mZoneMatch(
     const cleanPlace = placeName.toLowerCase().trim();
     if (
       (cleanPlace.length >= 4 &&
-        !isBroadAreaName(cleanPlace) &&
+        (cleanPlace.split(/\s+/).length >= 2 || hasDistinctivePlaceWord(cleanPlace)) &&
         lowerTitle.includes(cleanPlace)) ||
       (ENABLE_SRI_LANKA_PROTOTYPE && fuzzyLocalityMatch(title, placeName))
     ) {
@@ -194,9 +202,13 @@ function verify200mZoneMatch(
 
   // When Sri Lanka prototype mode is active, match extracted Sri Lankan sub-localities/towns
   if (ENABLE_SRI_LANKA_PROTOTYPE) {
-    const localities = extractSriLankaLocalityTokens(locationName, address);
+    // Localities come from the address: words of a business name ("Perera & Sons")
+    // aren't places
+    const localities = address
+      ? extractSriLankaLocalityTokens('', address)
+      : extractSriLankaLocalityTokens(locationName);
     for (const locToken of localities) {
-      if (isBroadAreaName(locToken)) continue;
+      if (!hasDistinctivePlaceWord(locToken)) continue;
       const lowerLoc = locToken.toLowerCase();
       if (
         (lowerLoc.length >= 4 && lowerTitle.includes(lowerLoc)) ||
@@ -590,15 +602,135 @@ async function fetchAndPreprocess200mCrimeReports(
     // Ignore Reddit timeout
   }
 
-  verifiedArticles.sort((a, b) => a.daysAgo - b.daysAgo);
+  // Recency is about when the crime happened, not when it was reported
+  const datedArticles = (await applyIncidentDates(verifiedArticles)).filter((art) => {
+    if (art.daysAgo <= MAX_ARTICLE_AGE_DAYS) return true;
+    rejectedTooOldCount++;
+    if (rejectedExamples.length < 5) {
+      rejectedExamples.push({
+        title: art.title,
+        reason: `Filtered: Crime happened over ${MAX_ARTICLE_AGE_DAYS} days ago`,
+      });
+    }
+    return false;
+  });
+
+  datedArticles.sort((a, b) => a.daysAgo - b.daysAgo);
   return {
-    verifiedArticles: verifiedArticles.slice(0, 8),
+    verifiedArticles: datedArticles.slice(0, 8),
     rawCount,
     rejectedNonCrimeCount,
     rejectedOutsideRadiusCount,
     rejectedTooOldCount,
     rejectedExamples,
   };
+}
+
+const INCIDENT_DATE_TIMEOUT_MS = 15000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
+}
+
+/**
+ * Asks Gemini, in one batched call, when each article's crime actually
+ * happened. Returns YYYY-MM-DD per article index; articles it can't date are
+ * left out. An empty map means Gemini was unavailable.
+ */
+async function extractIncidentDatesWithGemini(
+  items: { id: number; published: string; headline: string; text: string }[]
+): Promise<Map<number, string>> {
+  const dates = new Map<number, string>();
+  if (items.length === 0) return dates;
+
+  const prompt = `For each news article below, give the date the crime or incident itself happened.
+- Use the article text, not the publish date. Resolve words like "yesterday", "last night" or "on Monday" relative to the article's publish date.
+- If the article is about an arrest, court case or investigation, give the date of the original crime when the text states it.
+- If the text does not say when the crime happened, use null. Do not guess.
+Respond ONLY with JSON: {"dates":[{"id":0,"incident_date":"YYYY-MM-DD" or null}]}
+
+Articles:
+${JSON.stringify(
+  items.map((item) => ({
+    id: item.id,
+    published: item.published.slice(0, 10),
+    headline: item.headline,
+    text: item.text.slice(0, 1500),
+  }))
+)}`;
+
+  for (const model of ['gemini-3.1-flash-lite', 'gemini-flash-latest']) {
+    try {
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: { temperature: 0, responseMimeType: 'application/json' },
+        }),
+        10000
+      );
+      const parsed = extractJsonObject(response.text || '');
+      for (const entry of Array.isArray(parsed?.dates) ? parsed.dates : []) {
+        const item = items.find((i) => i.id === entry?.id);
+        const day = typeof entry?.incident_date === 'string' ? entry.incident_date : '';
+        if (item && isPlausibleIncidentDate(day, item.published)) dates.set(item.id, day);
+      }
+      return dates;
+    } catch {
+      // Try the next model; if none respond, callers use the rule-based fallback
+    }
+  }
+  return dates;
+}
+
+/**
+ * Reads each verified article to find when the crime actually happened, since
+ * it is often days before publication. Gemini reads the text; if it can't, a
+ * rule-based reader checks the opening sentences; otherwise the publish date
+ * is kept. Social media posts are dated by when they were posted.
+ */
+async function applyIncidentDates(articles: RawFeedArticle[]): Promise<RawFeedArticle[]> {
+  const dateAll = async (): Promise<RawFeedArticle[]> => {
+    const published = articles.map((art) =>
+      Number.isNaN(Date.parse(art.pubDate)) ? null : new Date(art.pubDate).toISOString()
+    );
+    const texts = await Promise.all(
+      articles.map(async (art, i) =>
+        art.sourceType === 'Social Media' || !published[i]
+          ? ''
+          : (await fetchArticleDetails(art.link)).text
+      )
+    );
+
+    const geminiDates = await extractIncidentDatesWithGemini(
+      articles
+        .map((art, id) => ({ id, published: published[id] || '', headline: art.title, text: texts[id] }))
+        .filter((item) => item.text && item.published)
+    );
+
+    return articles.map((art, i) => {
+      const publishedIso = published[i];
+      if (!publishedIso) return art;
+      const incidentDay =
+        geminiDates.get(i) ?? (texts[i] ? findIncidentDateInText(texts[i], publishedIso) : null);
+      if (!incidentDay) return art;
+
+      // Same day as publishing: keep the publish time so "3 hours ago" stays accurate
+      const incidentDate =
+        incidentDay === publishedIso.slice(0, 10) ? art.pubDate : `${incidentDay}T12:00:00Z`;
+      const { daysAgo, recencyText } = computeRecencyFromDate(incidentDate);
+      return { ...art, incidentDate, daysAgo, recencyText };
+    });
+  };
+
+  try {
+    return await withTimeout(dateAll(), INCIDENT_DATE_TIMEOUT_MS);
+  } catch {
+    return articles;
+  }
 }
 
 function buildAnalysisFromVerifiedArticles(

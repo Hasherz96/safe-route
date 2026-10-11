@@ -11,6 +11,8 @@ import type { CrimeType, IncidentItem, RiskLevel, SeverityImpact, SourceType } f
 export interface RawFeedArticle {
   title: string;
   pubDate: string;
+  /** When the crime itself happened (ISO), read from the article; falls back to pubDate. */
+  incidentDate?: string;
   sourceName: string;
   sourceType: SourceType;
   link: string;
@@ -230,15 +232,38 @@ export function preprocessAndClassifyHeadline(title: string): HeadlineClassifica
     }
   }
 
-  // 1F. Accidents: "killed in crash" is a tragedy, not a crime risk for visitors
+  // 1F. Accidents, wildlife, disease and disasters: "killed in crash" or
+  // "deadly dengue outbreak" is a tragedy, not a crime risk for visitors
+  const deliberateHarmPattern =
+    /\b(murder|murdered|stab|stabs|stabbed|stabbing|shot dead|gunmen|gunman|shooting|robbery|robbed|assault|assaulted|kidnap\w*|abduct\w*|rape|raped|sexual\w*|molest\w*|hacked|sword|grenade)\b/i;
   const accidentPattern =
     /\b(crash|crashes|crashed|accident|accidents|collision|collided|collides|run over|knocked down|overturned|toppled|derailed|drowned|drowning|lightning|landslide|electrocuted|tree fell|wall collapse)\b/i;
-  const deliberateHarmPattern =
-    /\b(murder|murdered|stab|stabbed|stabbing|shot dead|gunmen|gunman|shooting|robbery|robbed|assault|assaulted|attacked|attack|kidnap|abduct|hacked|sword|grenade)\b/i;
-  if (accidentPattern.test(lower) && !deliberateHarmPattern.test(lower)) {
+  const naturalCausePattern =
+    /\b(elephant|wild animal|crocodile|leopard|snake ?bite|dog attack|dengue|outbreak|disease|virus|epidemic|flood|floods|cyclone|storm|tsunami|earthquake|fire broke out|blaze|wildfire|heatwave)\b/i;
+  if (
+    (accidentPattern.test(lower) || naturalCausePattern.test(lower)) &&
+    !deliberateHarmPattern.test(lower)
+  ) {
     return {
       isCrime: false,
       rejectionReason: 'Accident or natural incident (not a crime)',
+      crime_type: 'Nuisance',
+      severity_impact: 'Low',
+      csw: 0,
+    };
+  }
+
+  // 1G. Allegations, denials and political/legal disputes ("MP refutes assault
+  // allegations") are about claims, not an incident visitors could run into.
+  // Keep them only when the headline also describes an actual incident.
+  const disputePattern =
+    /\b(refute[sd]?|refuting|den(?:y|ies|ied|ying)|rejects? (?:the )?(?:allegations?|claims?|charges?)|allegations?|defamation|lawsuit|sues|sued|hits? back|slams?|counter[- ]complaint|smear)\b/i;
+  const incidentEvidencePattern =
+    /\b(arrested|remanded|victims?|injured|hospitali[sz]ed|died|killed|dead|body|bodies|stabbed|stabbing|shot dead|gunfire|robbed|stolen|snatched|abducted|kidnapped|raped)\b/i;
+  if (disputePattern.test(lower) && !incidentEvidencePattern.test(lower)) {
+    return {
+      isCrime: false,
+      rejectionReason: 'Allegation, denial or dispute (no reported incident)',
       crime_type: 'Nuisance',
       severity_impact: 'Low',
       csw: 0,
@@ -253,36 +278,81 @@ export function preprocessAndClassifyHeadline(title: string): HeadlineClassifica
     'gunfire',
     'homicide',
     'murder',
-    'killed',
-    'fatal',
+    'kill',
     'stabbing',
     'stabbed',
-    'kidnapping',
-    'abduction',
+    'stabs',
+    'kidnap',
+    'abduct',
     'armed robbery',
     'carjacking',
     'gunpoint',
     'gunman',
+    'gunmen',
     'stray bullet',
     'mass shooting',
-    'deadly',
+    // Sexual offences and child abuse
+    'rape',
+    'raped',
+    'rapist',
+    'sexual abuse',
+    'sexually abused',
+    'sexual assault',
+    'sexually assaulted',
+    'sexual harassment',
+    'sexually harassed',
+    'molest',
+    'child abuse',
+    'indecent assault',
+    'grave sexual',
     ...(ENABLE_SRI_LANKA_PROTOTYPE ? SRI_LANKA_CRIME_KEYWORDS.violent : []),
   ];
   if (hasAnyKeyword(lower, violentKeywords)) {
+    // Loss of life, sexual offences against a person, and abductions are the most severe
     const isExtreme = hasAnyKeyword(lower, [
       'homicide',
       'murder',
+      'kill',
       'fatal',
-      'killed',
       'mass shooting',
       'hacked to death',
       'grenade attack',
+      'contract killing',
+      'rape',
+      'raped',
+      'rapist',
+      'sexual abuse',
+      'sexually abused',
+      'sexual assault',
+      'sexually assaulted',
+      'molest',
+      'child abuse',
+      'grave sexual',
+      'kidnap',
+      'abduct',
     ]);
+    // A robbery at gunpoint threatens violence; a shooting or stabbing is violence done
+    const isArmedThreatOnly =
+      hasAnyKeyword(lower, ['armed robbery', 'gunpoint', 'carjacking']) &&
+      !hasAnyKeyword(lower, [
+        'shooting',
+        'shot',
+        'gunfire',
+        'open fire',
+        'opened fire',
+        'stabbing',
+        'stabbed',
+        'stabs',
+        'stray bullet',
+        'hand grenade',
+        'sword attack',
+        'sharp weapon',
+      ]);
     return {
       isCrime: true,
       crime_type: 'Violent',
       severity_impact: 'High',
-      csw: isExtreme ? 12 : 10,
+      csw: isExtreme ? 12 : isArmedThreatOnly ? 8 : 10,
     };
   }
 
@@ -292,8 +362,9 @@ export function preprocessAndClassifyHeadline(title: string): HeadlineClassifica
     Violent: ['assault', 'attacked', 'unprovoked attack'],
     Burglary: ['burglary', 'burglar', 'home invasion', 'house break', 'housebreak'],
     Theft: [
-      'robbery',
+      'robber',
       'robbed',
+      'robbing',
       'auto theft',
       'stolen car',
       'stolen vehicle',
@@ -305,11 +376,17 @@ export function preprocessAndClassifyHeadline(title: string): HeadlineClassifica
   };
   for (const [crime_type, keywords] of Object.entries(moderateKeywordsByType)) {
     if (!hasAnyKeyword(lower, keywords)) continue;
+    // Every word form of the same offence carries the same weight
     const isHigherMod = hasAnyKeyword(lower, [
       'assault',
-      'robbery',
+      'attacked',
+      'unprovoked attack',
+      'robber',
+      'robbed',
+      'robbing',
       'home invasion',
       'smash-and-grab',
+      'smash and grab',
     ]);
     return {
       isCrime: true,
@@ -348,7 +425,9 @@ export function preprocessAndClassifyHeadline(title: string): HeadlineClassifica
       isCrime: true,
       crime_type: crime_type as CrimeType,
       severity_impact: 'Low',
-      csw: hasAnyKeyword(lower, ['break-in', 'retail']) ? 3 : 2,
+      csw: hasAnyKeyword(lower, ['break-in', 'broke into', 'broken into', 'bipping', 'retail'])
+        ? 3
+        : 2,
     };
   }
 
@@ -430,7 +509,7 @@ export function findMatchingArticle(
 export function incidentFromArticle(art: RawFeedArticle): IncidentItem {
   const { crime_type, severity_impact, csw } = preprocessAndClassifyHeadline(art.title);
   const source_multiplier = art.sourceType === 'Social Media' ? 0.5 : 1.0;
-  const { recencyMultiplier } = computeRecencyFromDate(art.pubDate);
+  const { recencyMultiplier } = computeRecencyFromDate(art.incidentDate || art.pubDate);
   return {
     crime_type,
     description: art.title,

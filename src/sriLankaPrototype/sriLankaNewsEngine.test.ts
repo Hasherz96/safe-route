@@ -4,6 +4,7 @@ import {
   distinctivePlaceWords,
   extractPublishDateFromHtml,
   fuzzyLocalityMatch,
+  hasDistinctivePlaceWord,
   isBroadAreaName,
 } from './sriLankaNewsEngine';
 
@@ -84,5 +85,26 @@ describe('city-wide mentions are not a 200m match', () => {
     assert.equal(isBroadAreaName('Pettah'), false);
     assert.deepEqual(distinctivePlaceWords('Kandy City Centre'), []);
     assert.deepEqual(distinctivePlaceWords('Devon Restaurant'), ['devon']);
+  });
+});
+
+describe('surnames are not place names', () => {
+  const headline = 'MP Sujith Sanjay Perera refutes assault allegations by MP Archchuna Ramanathan';
+
+  it('does not match a person named in the headline to a business named after them', () => {
+    assert.equal(fuzzyLocalityMatch(headline, 'P&S (Perera & Sons) - Ragama Town'), false);
+    assert.equal(fuzzyLocalityMatch(headline, 'Perera'), false);
+    assert.equal(hasDistinctivePlaceWord('Perera'), false);
+  });
+
+  it('still matches the real locality in the name', () => {
+    assert.equal(fuzzyLocalityMatch('Shop robbed in Ragama town', 'Ragama'), true);
+    assert.deepEqual(distinctivePlaceWords('P&S (Perera & Sons) - Ragama Town'), ['ragama']);
+    assert.equal(fuzzyLocalityMatch('Father and two sons arrested over assault', 'Silva & Sons'), false);
+  });
+
+  it('still matches a street named after a person by its full name', () => {
+    assert.equal(fuzzyLocalityMatch('Man stabbed on Perera Mawatha last night', 'Perera Mawatha'), true);
+    assert.equal(fuzzyLocalityMatch(headline, 'Perera Mawatha'), false);
   });
 });
