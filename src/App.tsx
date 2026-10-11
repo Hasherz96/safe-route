@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import {
-  Smartphone,
-  Maximize2,
-  Code2,
   Wifi,
   BatteryCharging,
   ChevronLeft,
@@ -39,16 +36,13 @@ export default function App() {
   }, [mapsApiKey]);
 
   if (mapsApiKey === null) {
-    return <div className="h-screen w-screen bg-slate-950" aria-busy="true" />;
+    return <div className="h-screen w-screen bg-slate-50" aria-busy="true" />;
   }
   return <SafeRouteApp mapsApiKey={mapsApiKey} />;
 }
 
 function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
   const [quotaExceeded, setQuotaExceeded] = useState(false);
-  const [viewportMode, setViewportMode] = useState<'device' | 'fullscreen'>(
-    'device'
-  );
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
 
   const [destination, setDestination] = useState<PlaceSelection | null>(null);
@@ -149,7 +143,7 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
       apiKey={mapsApiKey}
       libraries={['places', 'marker']}
     >
-      <div className="h-screen w-screen overflow-hidden flex flex-col bg-slate-950 text-slate-100">
+      <div className="h-screen w-screen overflow-hidden flex flex-col bg-slate-50 text-slate-900">
         {quotaExceeded && (
           <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
             <span>
@@ -168,104 +162,33 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
           </div>
         )}
 
-        {/* Strict 3-Zone Top Bar Contract */}
-        <header className="flex items-center justify-between px-5 py-3 border-b border-slate-800/80 bg-slate-950/95 shrink-0 z-40">
+        <header className="flex items-center justify-center px-5 py-3 border-b border-slate-200/80 bg-slate-50/95 shrink-0 z-40">
           <a
             href="#top"
             onClick={(e) => {
               e.preventDefault();
               setSheetExpanded(false);
             }}
-            className="font-display text-lg font-bold tracking-tight text-white whitespace-nowrap"
+            className="font-display text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap"
           >
             BeSafe Android
           </a>
-
-          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-400">
-            <a
-              href="#map"
-              onClick={(e) => {
-                e.preventDefault();
-                setSheetExpanded(false);
-              }}
-              className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-            >
-              200m Map
-            </a>
-            <a
-              href="#intelligence"
-              onClick={(e) => {
-                e.preventDefault();
-                setSheetExpanded(true);
-              }}
-              className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-            >
-              Crime Sheet
-            </a>
-            <a
-              href="#source"
-              onClick={(e) => {
-                e.preventDefault();
-                setIsSourceModalOpen(true);
-              }}
-              className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-            >
-              Expo Manifest
-            </a>
-          </nav>
-
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={() =>
-                setViewportMode((prev) =>
-                  prev === 'device' ? 'fullscreen' : 'device'
-                )
-              }
-              className="hidden sm:inline-flex min-h-[38px] px-3.5 py-1.5 text-xs font-medium text-slate-200 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
-            >
-              {viewportMode === 'device' ? (
-                <>
-                  <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Full Canvas</span>
-                </>
-              ) : (
-                <>
-                  <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Android Frame</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsSourceModalOpen(true)}
-              className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
-            >
-              <Code2 className="w-3.5 h-3.5" />
-              <span>Native Code</span>
-            </button>
-          </div>
         </header>
 
-        <main className="flex-1 relative flex items-center justify-center overflow-hidden bg-slate-950 p-0 sm:p-4">
+        <main className="flex-1 relative flex items-center justify-center overflow-hidden bg-slate-50 p-0 sm:p-4">
           <div
-            className={`relative flex flex-col bg-slate-950 overflow-hidden transition-all duration-200 ${
-              viewportMode === 'device'
-                ? 'w-full h-full sm:w-[420px] sm:h-[840px] sm:max-h-full sm:rounded-[38px] sm:border-[6px] sm:border-slate-800 sm:shadow-[0_25px_70px_rgba(0,0,0,0.85)]'
-                : 'w-full h-full rounded-none sm:rounded-2xl sm:border sm:border-slate-800'
-            }`}
+            className="relative flex flex-col bg-slate-50 overflow-hidden w-full h-full sm:w-[420px] sm:h-[840px] sm:max-h-full sm:rounded-[38px] sm:border-[6px] sm:border-slate-200 sm:shadow-[0_25px_70px_rgba(15,23,42,0.18)]"
           >
             {/* Translucent Android Status Bar */}
-            <div className="h-7 px-5 bg-slate-950/90 backdrop-blur-md flex items-center justify-between text-[11px] font-mono-tabular text-slate-300 shrink-0 z-40 border-b border-slate-900">
+            <div className="h-7 px-5 bg-slate-50/90 backdrop-blur-md flex items-center justify-between text-[11px] font-mono-tabular text-slate-700 shrink-0 z-40 border-b border-slate-200">
               <span>09:41</span>
-              <div className="w-16 h-3 rounded-full bg-black/80 border border-slate-800/80 hidden sm:block" />
+              <div className="w-16 h-3 rounded-full bg-black/80 border border-slate-200/80 hidden sm:block" />
               <div className="flex items-center gap-2">
-                <span className="text-[10px] text-emerald-400 font-sans font-medium">
+                <span className="text-[10px] text-emerald-600 font-sans font-medium">
                   5G
                 </span>
-                <Wifi className="w-3 h-3 text-slate-300" />
-                <BatteryCharging className="w-3.5 h-3.5 text-emerald-400" />
+                <Wifi className="w-3 h-3 text-slate-700" />
+                <BatteryCharging className="w-3.5 h-3.5 text-emerald-600" />
               </div>
             </div>
 
@@ -302,12 +225,12 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
             </div>
 
             {/* Native Android System Navigation Bar */}
-            <div className="h-10 bg-slate-950 border-t border-slate-900 px-12 flex items-center justify-between shrink-0 z-40">
+            <div className="h-10 bg-slate-50 border-t border-slate-200 px-12 flex items-center justify-between shrink-0 z-40">
               <button
                 type="button"
                 onClick={handleAndroidBackPress}
                 title="Android Back Button"
-                className="min-w-[44px] min-h-[36px] flex items-center justify-center text-slate-400 hover:text-white active:scale-90 transition-all cursor-pointer"
+                className="min-w-[44px] min-h-[36px] flex items-center justify-center text-slate-500 hover:text-slate-900 active:scale-90 transition-all cursor-pointer"
                 aria-label="Android Back Button"
               >
                 <ChevronLeft className="w-5 h-5" />
@@ -316,7 +239,7 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
                 type="button"
                 onClick={() => setSheetExpanded(false)}
                 title="Android Home Button"
-                className="min-w-[44px] min-h-[36px] flex items-center justify-center text-slate-400 hover:text-white active:scale-90 transition-all cursor-pointer"
+                className="min-w-[44px] min-h-[36px] flex items-center justify-center text-slate-500 hover:text-slate-900 active:scale-90 transition-all cursor-pointer"
                 aria-label="Android Home Button"
               >
                 <Circle className="w-3.5 h-3.5" />
@@ -325,7 +248,7 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
                 type="button"
                 onClick={() => setIsSourceModalOpen(true)}
                 title="Android Recents / Expo Source Inspector"
-                className="min-w-[44px] min-h-[36px] flex items-center justify-center text-slate-400 hover:text-white active:scale-90 transition-all cursor-pointer"
+                className="min-w-[44px] min-h-[36px] flex items-center justify-center text-slate-500 hover:text-slate-900 active:scale-90 transition-all cursor-pointer"
                 aria-label="Android Overview Button"
               >
                 <Square className="w-3.5 h-3.5" />

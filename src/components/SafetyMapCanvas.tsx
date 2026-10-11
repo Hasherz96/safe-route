@@ -54,35 +54,35 @@ function zoomForLargeArea(types: string[] | undefined): number {
 function getSafetyAccent(score: number | undefined) {
   if (score === undefined) {
     return {
-      bg: 'bg-slate-800',
-      border: 'border-slate-600',
-      text: 'text-slate-100',
+      bg: 'bg-slate-100',
+      border: 'border-slate-300',
+      text: 'text-slate-900',
       hex: '#38bdf8',
       label: 'Scanning 200m',
     };
   }
   if (score >= 4.0) {
     return {
-      bg: 'bg-emerald-950/95',
+      bg: 'bg-emerald-50',
       border: 'border-emerald-400',
-      text: 'text-emerald-300',
+      text: 'text-emerald-700',
       hex: '#10b981',
       label: 'Safe',
     };
   }
   if (score >= 3.0) {
     return {
-      bg: 'bg-amber-950/95',
+      bg: 'bg-amber-50',
       border: 'border-amber-400',
-      text: 'text-amber-300',
+      text: 'text-amber-700',
       hex: '#f59e0b',
       label: 'Moderate Risk',
     };
   }
   return {
-    bg: 'bg-rose-950/95',
+    bg: 'bg-rose-50',
     border: 'border-rose-500',
-    text: 'text-rose-300',
+    text: 'text-rose-700',
     hex: '#f43f5e',
     label: 'High Risk',
   };
@@ -334,7 +334,7 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
         gestureHandling="greedy"
         disableDefaultUI={true}
         mapTypeId={mapTypeId}
-        colorScheme="DARK"
+        colorScheme="LIGHT"
         internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
         className="w-full h-full"
       >
@@ -345,10 +345,10 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
             position={np.location}
             title={`${np.name} (${np.distanceMeters}m from target)`}
           >
-            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-950/85 border border-slate-700/80 text-[10px] text-slate-300 shadow">
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/95 border border-slate-300 text-[10px] text-slate-700 shadow">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
               <span className="max-w-[85px] truncate">{np.name}</span>
-              <span className="text-slate-500 font-mono-tabular">
+              <span className="text-slate-400 font-mono-tabular">
                 {np.distanceMeters}m
               </span>
             </div>
@@ -358,7 +358,7 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
         {/* Large areas get a plain name pin: there's no score to show */}
         {destination && destinationTooLarge && (
           <AdvancedMarker position={destination.location} title={destination.name}>
-            <div className="px-3 py-1.5 rounded-xl bg-slate-900/95 border border-slate-600 shadow-xl text-xs font-medium text-slate-200 whitespace-nowrap">
+            <div className="px-3 py-1.5 rounded-xl bg-white/95 border border-slate-300 shadow-xl text-xs font-medium text-slate-800 whitespace-nowrap">
               {destination.name}
             </div>
           </AdvancedMarker>
@@ -381,21 +381,21 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
                 className={`flex items-center gap-2.5 px-3 py-2 rounded-xl border-2 ${accent.bg} ${accent.border} shadow-2xl transition-transform duration-150 group-hover:scale-105`}
               >
                 {isAnalyzing || isScanning200m ? (
-                  <Loader2 className="w-4 h-4 text-sky-400 animate-spin shrink-0" />
+                  <Loader2 className="w-4 h-4 text-sky-600 animate-spin shrink-0" />
                 ) : safetyData && safetyData.safety_rating >= 4.0 ? (
-                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
                 ) : safetyData && safetyData.safety_rating >= 3.0 ? (
-                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                 ) : (
-                  <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                  <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
                 )}
 
                 <div className="flex flex-col items-start text-left">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-medium text-slate-300 max-w-[125px] truncate leading-tight">
+                    <span className="text-[11px] font-medium text-slate-700 max-w-[125px] truncate leading-tight">
                       {destination.name}
                     </span>
-                    <span className="text-[10px] font-mono-tabular text-slate-400">
+                    <span className="text-[10px] font-mono-tabular text-slate-500">
                       · 200m
                     </span>
                   </div>
@@ -411,10 +411,10 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
                             ? `${safetyData.safety_rating.toFixed(1)} / 5.0`
                             : '5.0 / 5.0'}
                     </span>
-                    <span className="text-slate-500" aria-hidden="true">
+                    <span className="text-slate-400" aria-hidden="true">
                       ·
                     </span>
-                    <span className="text-[11px] text-slate-300 whitespace-nowrap">
+                    <span className="text-[11px] text-slate-700 whitespace-nowrap">
                       {isScanning200m
                         ? 'Nearby Scan'
                         : isAnalyzing
@@ -426,7 +426,7 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
               </div>
               {/* Callout stem pointer */}
               <div
-                className="w-3 h-3 rotate-45 -mt-1.5 border-r-2 border-b-2 bg-slate-950"
+                className={`w-3 h-3 rotate-45 -mt-1.5 border-r-2 border-b-2 ${accent.bg}`}
                 style={{ borderColor: accent.hex }}
               />
             </button>
@@ -442,7 +442,7 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
             setMapTypeId((prev) => (prev === 'roadmap' ? 'hybrid' : 'roadmap'))
           }
           title="Toggle satellite hybrid map"
-          className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-900/90 backdrop-blur-md border border-slate-800 text-slate-200 hover:text-white hover:bg-slate-800 flex items-center justify-center shadow-lg transition-colors"
+          className="min-w-[44px] min-h-[44px] rounded-xl bg-white/90 backdrop-blur-md border border-slate-200 text-slate-800 hover:text-slate-900 hover:bg-slate-100 flex items-center justify-center shadow-lg transition-colors"
         >
           <Layers className="w-4 h-4" />
         </button>
@@ -450,16 +450,16 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
           type="button"
           onClick={handleRecenter}
           title="Recenter map on 200m target zone"
-          className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-900/90 backdrop-blur-md border border-slate-800 text-slate-200 hover:text-white hover:bg-slate-800 flex items-center justify-center shadow-lg transition-colors"
+          className="min-w-[44px] min-h-[44px] rounded-xl bg-white/90 backdrop-blur-md border border-slate-200 text-slate-800 hover:text-slate-900 hover:bg-slate-100 flex items-center justify-center shadow-lg transition-colors"
         >
           <Compass className="w-4 h-4" />
         </button>
-        <div className="flex flex-col rounded-xl bg-slate-900/90 backdrop-blur-md border border-slate-800 shadow-lg overflow-hidden">
+        <div className="flex flex-col rounded-xl bg-white/90 backdrop-blur-md border border-slate-200 shadow-lg overflow-hidden">
           <button
             type="button"
             onClick={() => handleZoom(1)}
             title="Zoom in"
-            className="min-w-[44px] min-h-[44px] text-slate-200 hover:text-white hover:bg-slate-800 flex items-center justify-center border-b border-slate-800 transition-colors"
+            className="min-w-[44px] min-h-[44px] text-slate-800 hover:text-slate-900 hover:bg-slate-100 flex items-center justify-center border-b border-slate-200 transition-colors"
           >
             <Plus className="w-4 h-4" />
           </button>
@@ -467,7 +467,7 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
             type="button"
             onClick={() => handleZoom(-1)}
             title="Zoom out"
-            className="min-w-[44px] min-h-[44px] text-slate-200 hover:text-white hover:bg-slate-800 flex items-center justify-center transition-colors"
+            className="min-w-[44px] min-h-[44px] text-slate-800 hover:text-slate-900 hover:bg-slate-100 flex items-center justify-center transition-colors"
           >
             <Minus className="w-4 h-4" />
           </button>
@@ -476,8 +476,8 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
 
       {/* Live 200m Scan Status Indicator */}
       {isScanning200m && (
-        <div className="absolute top-36 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-lg bg-slate-900/95 border border-slate-700 shadow-lg flex items-center gap-2 text-xs text-slate-200 whitespace-nowrap">
-          <Radar className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
+        <div className="absolute top-36 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-lg bg-white/95 border border-slate-300 shadow-lg flex items-center gap-2 text-xs text-slate-800 whitespace-nowrap">
+          <Radar className="w-3.5 h-3.5 text-emerald-600 animate-spin" />
           <span>Scanning 200m neighboring streets via Google Maps...</span>
         </div>
       )}
