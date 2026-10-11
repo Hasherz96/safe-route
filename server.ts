@@ -53,7 +53,7 @@ const ai = new GoogleGenAI({
   },
 });
 
-const SAFETY_SYSTEM_INSTRUCTION = `You are the SafeRoute Android Real-Time Crime Preprocessor & 200m Radius Safety Intelligence Engine.
+const SAFETY_SYSTEM_INSTRUCTION = `You are the BeSafe Real-Time Crime Preprocessor & 200m Radius Safety Intelligence Engine.
 Your task is to evaluate the real-time pedestrian and visitor safety within a strict 200-meter radius of a target location using Google Maps 200m neighborhood data and live news reports.
 
 ### CRITICAL PREPROCESSING & FILTERING RULES:
@@ -1224,7 +1224,7 @@ Return the strict JSON object only.`;
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(
-      `SafeRoute Android server listening on http://localhost:${PORT}`
+      `BeSafe server listening on http://localhost:${PORT}`
     );
   });
 }

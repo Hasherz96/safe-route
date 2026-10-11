@@ -178,7 +178,7 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
             }}
             className="font-display text-lg font-bold tracking-tight text-white whitespace-nowrap"
           >
-            SafeRoute Android
+            BeSafe Android
           </a>
 
           <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-400">
