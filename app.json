@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "SafeRoute Android",
+    "name": "BeSafe",
     "slug": "saferoute-android",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -34,7 +34,7 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Allow SafeRoute Android to access your location for turn-by-turn safe routing and real-time neighborhood safety scoring.",
+          "locationAlwaysAndWhenInUsePermission": "Allow BeSafe to access your location for turn-by-turn safe routing and real-time neighborhood safety scoring.",
           "isAndroidBackgroundLocationEnabled": false
         }
       ]

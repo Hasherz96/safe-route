@@ -1,4 +1,4 @@
-# SafeRoute: Express API (news preprocessing, Gemini, scoring) + React front end.
+# BeSafe: Express API (news preprocessing, Gemini, scoring) + React front end.
 # Runs on Cloud Run or any container host that sets $PORT.
 
 # Stage 1: build the React front end

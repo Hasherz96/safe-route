@@ -8,7 +8,7 @@ interface AndroidSourceModalProps {
 
 const APP_JSON_CODE = `{
   "expo": {
-    "name": "SafeRoute Android",
+    "name": "BeSafe",
     "slug": "saferoute-android",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -35,7 +35,7 @@ const APP_JSON_CODE = `{
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Allow SafeRoute Android to access your location for turn-by-turn safe routing and real-time area safety scoring."
+          "locationAlwaysAndWhenInUsePermission": "Allow BeSafe to access your location for turn-by-turn safe routing and real-time area safety scoring."
         }
       ]
     ]
