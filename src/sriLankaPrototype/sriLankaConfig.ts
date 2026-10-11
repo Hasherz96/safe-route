@@ -149,15 +149,17 @@ export const SRI_LANKA_DEFAULT_CENTER = {
   lng: 79.8528, // Colombo / Pettah hub
 };
 
-export const SRI_LANKA_INITIAL_SEARCH_QUERY = 'Pettah Colombo Sri Lanka';
+// Specific places only: whole neighbourhoods and towns are too large to score
+export const SRI_LANKA_INITIAL_SEARCH_QUERY = 'Central Bus Stand Colombo';
 
 export const SRI_LANKA_QUICK_SEARCH_PRESETS = [
-  { label: 'Pettah, Colombo', query: 'Pettah Colombo Sri Lanka' },
-  { label: 'Dehiwala, Colombo', query: 'Dehiwala Sri Lanka' },
-  { label: 'Bambalapitiya, Colombo', query: 'Bambalapitiya Colombo Sri Lanka' },
+  { label: 'Pettah Bus Stand', query: 'Central Bus Stand Colombo' },
+  { label: 'Galle Face Green', query: 'Galle Face Green Colombo Sri Lanka' },
+  { label: 'Dehiwala Zoo', query: 'National Zoological Gardens Dehiwala Sri Lanka' },
+  { label: 'Majestic City, Bambalapitiya', query: 'Majestic City Bambalapitiya Colombo Sri Lanka' },
   { label: 'Fort Railway, Colombo', query: 'Colombo Fort Railway Station Sri Lanka' },
   { label: 'Kandy City Centre', query: 'Kandy City Centre Sri Lanka' },
-  { label: 'Galle Fort', query: 'Galle Fort Sri Lanka' },
+  { label: 'Galle Lighthouse', query: 'Galle Lighthouse Sri Lanka' },
 ];
 
 /**

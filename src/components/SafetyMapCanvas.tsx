@@ -31,6 +31,8 @@ import {
 
 interface SafetyMapCanvasProps {
   destination: PlaceSelection | null;
+  /** A neighbourhood, town or larger area: shown on the map but not scanned or scored. */
+  destinationTooLarge: boolean;
   safetyData: SafetyAnalysisResponse | null;
   isAnalyzing: boolean;
   onNearbyAreaDiscovered: (
@@ -39,6 +41,14 @@ interface SafetyMapCanvasProps {
   ) => void;
   onMarkerPress: () => void;
   onQuotaExceeded: () => void;
+}
+
+/** Map zoom that fits a large area: a country, a province/district, or a town. */
+function zoomForLargeArea(types: string[] | undefined): number {
+  if (types?.some((t) => t === 'country' || t === 'continent' || t === 'archipelago')) return 7;
+  if (types?.some((t) => t === 'administrative_area_level_1' || t === 'administrative_area_level_2')) return 9;
+  if (types?.some((t) => t === 'locality' || t === 'postal_town')) return 12;
+  return 14;
 }
 
 function getSafetyAccent(score: number | undefined) {
@@ -111,6 +121,7 @@ function extractStreetNameFromAddress(address: string): string | null {
 
 export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
   destination,
+  destinationTooLarge,
   safetyData,
   isAnalyzing,
   onNearbyAreaDiscovered,
@@ -139,7 +150,7 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
       radiusCircleRef.current = null;
     }
 
-    if (!destination) return;
+    if (!destination || destinationTooLarge) return;
 
     const accent = getSafetyAccent(safetyData?.safety_rating);
     const CircleClass = (mapsLib as any).Circle;
@@ -174,6 +185,17 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
     const placeKey = `${destination.name}-${destination.location.lat.toFixed(5)},${destination.location.lng.toFixed(5)}`;
     if (lastScannedPlaceKeyRef.current === placeKey) return;
     lastScannedPlaceKeyRef.current = placeKey;
+
+    if (destinationTooLarge) {
+      // Too large to score: just show where it is
+      if (map) {
+        map.panTo(destination.location);
+        map.setZoom(zoomForLargeArea(destination.types));
+      }
+      setNearbyPlaces200m([]);
+      setIsScanning200m(false);
+      return;
+    }
 
     if (map) {
       map.panTo(destination.location);
@@ -276,6 +298,7 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
     };
   }, [
     destination,
+    destinationTooLarge,
     placesLib,
     map,
     onNearbyAreaDiscovered,
@@ -294,7 +317,7 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
     if (!map) return;
     if (destination) {
       map.panTo(destination.location);
-      map.setZoom(16);
+      map.setZoom(destinationTooLarge ? zoomForLargeArea(destination.types) : 16);
     }
   };
 
@@ -332,8 +355,17 @@ export const SafetyMapCanvas: React.FC<SafetyMapCanvasProps> = ({
           </AdvancedMarker>
         ))}
 
+        {/* Large areas get a plain name pin: there's no score to show */}
+        {destination && destinationTooLarge && (
+          <AdvancedMarker position={destination.location} title={destination.name}>
+            <div className="px-3 py-1.5 rounded-xl bg-slate-900/95 border border-slate-600 shadow-xl text-xs font-medium text-slate-200 whitespace-nowrap">
+              {destination.name}
+            </div>
+          </AdvancedMarker>
+        )}
+
         {/* Destination Custom Safety Score Map Callout Pin */}
-        {destination && (
+        {destination && !destinationTooLarge && (
           <AdvancedMarker
             position={destination.location}
             title={destination.name}
