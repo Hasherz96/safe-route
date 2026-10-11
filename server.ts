@@ -8,15 +8,28 @@ import { GoogleGenAI } from '@google/genai';
 import { ENABLE_SRI_LANKA_PROTOTYPE } from './src/sriLankaPrototype/sriLankaConfig';
 import {
   buildSriLankaNationalNewsQueries,
+  distinctivePlaceWords,
   extractSriLankaLocalityTokens,
   fetchArticlePublishDate,
   fetchDirectSriLankaRssFeeds,
   fuzzyLocalityMatch,
   getSriLankaGeminiPromptAppendix,
+  hasDistinctivePlaceWord,
   matchSriLankaNationalOutlet,
 } from './src/sriLankaPrototype/sriLankaNewsEngine';
 import {
+  fetchArticleDetails,
+  findIncidentDateInText,
+  isPlausibleIncidentDate,
+} from './src/articleDates';
+import {
+  areVisitorTipsConcise,
+  MAX_VISITOR_TIPS,
+  buildVisitorTips,
   computeRecencyFromDate,
+  dedupeIncidents,
+  describeMatchedPlace,
+  findMatchingArticle,
   incidentFromArticle,
   MAX_ARTICLE_AGE_DAYS,
   mergeIncidents,
@@ -53,8 +66,11 @@ Your task is to evaluate the real-time pedestrian and visitor safety within a st
 ### STRICT SCORING ALGORITHM & METHODOLOGY:
 1. Base Score: 5.0 (Extremely Safe)
 2. Crime Severity Weights (CSW):
-   - Violent / High Severity (Murder, Homicide, Shooting, Stabbing, Kidnapping, Armed Robbery, Carjacking): CSW = 10 to 12
-   - Property / Moderate Severity (Burglary, Auto Theft, Aggravated Assault, Robbery): CSW = 5 to 7
+   - Most severe (Murder, Homicide, Rape, Sexual Assault/Abuse, Molestation, Child Abuse, Kidnapping, Abduction): CSW = 12
+   - Violent / High Severity (Shooting, Stabbing, Sword/Weapon Attack): CSW = 10
+   - Armed threat without injury (Armed Robbery, Robbery at Gunpoint, Carjacking): CSW = 8
+   - Property / Moderate Severity (Burglary, Auto Theft, Assault, Robbery): CSW = 5 to 7
+   - Accidents, disease outbreaks, animal attacks and natural disasters are NOT crimes, even if "deadly" or "fatal"
    - Minor Crimes (Petty Theft, Shoplifting, Pickpocketing, Vandalism, Vehicle Break-in, Larceny): CSW = 2 to 3
    - Nuisance / Low Risk (Public Intoxication, Loitering, Noise, Trespassing, Disorderly Conduct): CSW = 1
 3. Multipliers:
@@ -94,11 +110,17 @@ Respond ONLY with a valid JSON object matching this exact schema:
     }
   ],
   "safety_recommendations": [
-    "Practical safety advice 1",
-    "Practical safety advice 2",
-    "Practical safety advice 3"
+    "Keep your phone and wallet out of sight, especially in crowds.",
+    "Avoid walking alone here late at night.",
+    "Stick to busy, well-lit main roads after dark."
   ]
-}${ENABLE_SRI_LANKA_PROTOTYPE ? getSriLankaGeminiPromptAppendix() : ''}`;
+}
+
+### VISITOR TIPS (safety_recommendations):
+- Exactly 3 tips for someone visiting this area, most important first.
+- Each tip is ONE short sentence of at most 12 words, starting with an action verb.
+- Base the tips on the crime types actually found (e.g. theft -> guard phone/wallet; violent -> avoid being alone at night).
+- Use plain everyday language. No jargon (e.g. "200m perimeter", "corridors", "telemetry", "situational awareness"), no statistics, no counts, no scores.${ENABLE_SRI_LANKA_PROTOTYPE ? getSriLankaGeminiPromptAppendix() : ''}`;
 
 /**
  * STAGE 2 PREPROCESSOR:
@@ -119,15 +141,19 @@ function verify200mZoneMatch(
     .trim()
     .toLowerCase();
 
-  // Check direct target place name match or fuzzy locality match
+  // Check direct target place name match or fuzzy locality match. A bare city
+  // name ("Kandy") is too broad to place a story within 200m; a fuller phrase
+  // ("Kandy City Centre") is fine.
+  const targetIsSpecific =
+    cleanTarget.split(/\s+/).length >= 2 || hasDistinctivePlaceWord(cleanTarget);
   if (cleanTarget && cleanTarget.length >= 3) {
     if (
-      lowerTitle.includes(cleanTarget) ||
+      (targetIsSpecific && lowerTitle.includes(cleanTarget)) ||
       (ENABLE_SRI_LANKA_PROTOTYPE && fuzzyLocalityMatch(title, cleanTarget))
     ) {
       return {
         matched: true,
-        matchedZone: `Within 200m · ${locationName.split(',')[0].trim()}`,
+        matchedZone: `Within 200m · ${describeMatchedPlace(title, locationName)}`,
       };
     }
   }
@@ -145,6 +171,7 @@ function verify200mZoneMatch(
     if (
       (cleanStreet.length >= 4 && lowerTitle.includes(cleanStreet)) ||
       (streetBase.length >= 4 &&
+        hasDistinctivePlaceWord(streetBase) &&
         new RegExp(`\\b${streetBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(
           lowerTitle
         )) ||
@@ -161,7 +188,9 @@ function verify200mZoneMatch(
   for (const placeName of nearbyPlaceNames) {
     const cleanPlace = placeName.toLowerCase().trim();
     if (
-      (cleanPlace.length >= 4 && lowerTitle.includes(cleanPlace)) ||
+      (cleanPlace.length >= 4 &&
+        (cleanPlace.split(/\s+/).length >= 2 || hasDistinctivePlaceWord(cleanPlace)) &&
+        lowerTitle.includes(cleanPlace)) ||
       (ENABLE_SRI_LANKA_PROTOTYPE && fuzzyLocalityMatch(title, placeName))
     ) {
       return {
@@ -173,8 +202,13 @@ function verify200mZoneMatch(
 
   // When Sri Lanka prototype mode is active, match extracted Sri Lankan sub-localities/towns
   if (ENABLE_SRI_LANKA_PROTOTYPE) {
-    const localities = extractSriLankaLocalityTokens(locationName, address);
+    // Localities come from the address: words of a business name ("Perera & Sons")
+    // aren't places
+    const localities = address
+      ? extractSriLankaLocalityTokens('', address)
+      : extractSriLankaLocalityTokens(locationName);
     for (const locToken of localities) {
+      if (!hasDistinctivePlaceWord(locToken)) continue;
       const lowerLoc = locToken.toLowerCase();
       if (
         (lowerLoc.length >= 4 && lowerTitle.includes(lowerLoc)) ||
@@ -182,20 +216,16 @@ function verify200mZoneMatch(
       ) {
         return {
           matched: true,
-          matchedZone: `Within 200m · ${locToken}`,
+          matchedZone: `Within 200m · ${describeMatchedPlace(title, locToken)}`,
         };
       }
     }
   }
 
   // Also check individual significant tokens of the searched place name
-  const targetTokens = cleanTarget
-    .split(/\s+/)
-    .filter(
-      (t) =>
-        t.length >= 4 &&
-        !['park', 'city', 'downtown', 'north', 'south', 'east', 'west', 'sri', 'lanka'].includes(t)
-    );
+  const targetTokens = distinctivePlaceWords(cleanTarget).filter(
+    (t) => t !== 'downtown'
+  );
   if (
     targetTokens.length > 0 &&
     targetTokens.every(
@@ -204,7 +234,7 @@ function verify200mZoneMatch(
   ) {
     return {
       matched: true,
-      matchedZone: `Within 200m · ${locationName.split(',')[0].trim()}`,
+      matchedZone: `Within 200m · ${describeMatchedPlace(title, locationName)}`,
     };
   }
 
@@ -572,9 +602,22 @@ async function fetchAndPreprocess200mCrimeReports(
     // Ignore Reddit timeout
   }
 
-  verifiedArticles.sort((a, b) => a.daysAgo - b.daysAgo);
+  // Recency is about when the crime happened, not when it was reported
+  const datedArticles = (await applyIncidentDates(verifiedArticles)).filter((art) => {
+    if (art.daysAgo <= MAX_ARTICLE_AGE_DAYS) return true;
+    rejectedTooOldCount++;
+    if (rejectedExamples.length < 5) {
+      rejectedExamples.push({
+        title: art.title,
+        reason: `Filtered: Crime happened over ${MAX_ARTICLE_AGE_DAYS} days ago`,
+      });
+    }
+    return false;
+  });
+
+  datedArticles.sort((a, b) => a.daysAgo - b.daysAgo);
   return {
-    verifiedArticles: verifiedArticles.slice(0, 8),
+    verifiedArticles: datedArticles.slice(0, 8),
     rawCount,
     rejectedNonCrimeCount,
     rejectedOutsideRadiusCount,
@@ -583,12 +626,122 @@ async function fetchAndPreprocess200mCrimeReports(
   };
 }
 
+const INCIDENT_DATE_TIMEOUT_MS = 15000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
+}
+
+/**
+ * Asks Gemini, in one batched call, when each article's crime actually
+ * happened. Returns YYYY-MM-DD per article index; articles it can't date are
+ * left out. An empty map means Gemini was unavailable.
+ */
+async function extractIncidentDatesWithGemini(
+  items: { id: number; published: string; headline: string; text: string }[]
+): Promise<Map<number, string>> {
+  const dates = new Map<number, string>();
+  if (items.length === 0) return dates;
+
+  const prompt = `For each news article below, give the date the crime or incident itself happened.
+- Use the article text, not the publish date. Resolve words like "yesterday", "last night" or "on Monday" relative to the article's publish date.
+- If the article is about an arrest, court case or investigation, give the date of the original crime when the text states it.
+- If the text does not say when the crime happened, use null. Do not guess.
+Respond ONLY with JSON: {"dates":[{"id":0,"incident_date":"YYYY-MM-DD" or null}]}
+
+Articles:
+${JSON.stringify(
+  items.map((item) => ({
+    id: item.id,
+    published: item.published.slice(0, 10),
+    headline: item.headline,
+    text: item.text.slice(0, 1500),
+  }))
+)}`;
+
+  for (const model of ['gemini-3.1-flash-lite', 'gemini-flash-latest']) {
+    try {
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: { temperature: 0, responseMimeType: 'application/json' },
+        }),
+        10000
+      );
+      const parsed = extractJsonObject(response.text || '');
+      for (const entry of Array.isArray(parsed?.dates) ? parsed.dates : []) {
+        const item = items.find((i) => i.id === entry?.id);
+        const day = typeof entry?.incident_date === 'string' ? entry.incident_date : '';
+        if (item && isPlausibleIncidentDate(day, item.published)) dates.set(item.id, day);
+      }
+      return dates;
+    } catch {
+      // Try the next model; if none respond, callers use the rule-based fallback
+    }
+  }
+  return dates;
+}
+
+/**
+ * Reads each verified article to find when the crime actually happened, since
+ * it is often days before publication. Gemini reads the text; if it can't, a
+ * rule-based reader checks the opening sentences; otherwise the publish date
+ * is kept. Social media posts are dated by when they were posted.
+ */
+async function applyIncidentDates(articles: RawFeedArticle[]): Promise<RawFeedArticle[]> {
+  const dateAll = async (): Promise<RawFeedArticle[]> => {
+    const published = articles.map((art) =>
+      Number.isNaN(Date.parse(art.pubDate)) ? null : new Date(art.pubDate).toISOString()
+    );
+    const texts = await Promise.all(
+      articles.map(async (art, i) =>
+        art.sourceType === 'Social Media' || !published[i]
+          ? ''
+          : (await fetchArticleDetails(art.link)).text
+      )
+    );
+
+    const geminiDates = await extractIncidentDatesWithGemini(
+      articles
+        .map((art, id) => ({ id, published: published[id] || '', headline: art.title, text: texts[id] }))
+        .filter((item) => item.text && item.published)
+    );
+
+    return articles.map((art, i) => {
+      const publishedIso = published[i];
+      if (!publishedIso) return art;
+      const incidentDay =
+        geminiDates.get(i) ?? (texts[i] ? findIncidentDateInText(texts[i], publishedIso) : null);
+      if (!incidentDay) return art;
+
+      // Same day as publishing: keep the publish time so "3 hours ago" stays accurate
+      const incidentDate =
+        incidentDay === publishedIso.slice(0, 10) ? art.pubDate : `${incidentDay}T12:00:00Z`;
+      const { daysAgo, recencyText } = computeRecencyFromDate(incidentDate);
+      return { ...art, incidentDate, daysAgo, recencyText };
+    });
+  };
+
+  try {
+    return await withTimeout(dateAll(), INCIDENT_DATE_TIMEOUT_MS);
+  } catch {
+    return articles;
+  }
+}
+
 function buildAnalysisFromVerifiedArticles(
   locationLabel: string,
   articles: RawFeedArticle[],
   preprocessingAudit: any
 ) {
-  const incident_breakdown = articles.map(incidentFromArticle);
+  const incident_breakdown = dedupeIncidents(
+    articles.map(incidentFromArticle),
+    locationLabel
+  );
   const { total_penalty, safety_rating, risk_level } =
     scoreIncidents(incident_breakdown);
 
@@ -609,24 +762,7 @@ function buildAnalysisFromVerifiedArticles(
     summary = `200m radius scan around ${locationLabel} (${streetsCount} adjacent streets & ${placesCount} nearby landmarks) verified ${incident_breakdown.length} actual crime reports (${violentCount} violent, ${propertyCount} property/theft) after rejecting ${preprocessingAudit.rejected_non_crime_count + preprocessingAudit.rejected_outside_radius_count} non-crime or out-of-zone articles.`;
   }
 
-  const safety_recommendations =
-    safety_rating < 3.0
-      ? [
-          `High-risk 200m zone: ${violentCount} verified violent incident(s) reported on adjacent corridors near ${locationLabel}. Avoid unlit blocks late at night.`,
-          'Use main transit entrances and well-patrolled commercial frontages within the 200m perimeter.',
-          'Keep valuables concealed and share live route telemetry when walking.',
-        ]
-      : safety_rating < 4.0
-        ? [
-            `Moderate caution advised within the 200m radius of ${locationLabel} due to recent property and street-level offenses.`,
-            'Do not leave bags or electronics visible in parked vehicles on surrounding side streets.',
-            'Remain on active pedestrian blocks after dusk.',
-          ]
-        : [
-            '200m perimeter shows low verified criminal activity; maintain standard urban situational awareness.',
-            'Keep mobile devices secured near transit stops and intersections.',
-            'Prefer well-lit sidewalks along primary streets after evening hours.',
-          ];
+  const safety_recommendations = buildVisitorTips(incident_breakdown);
 
   const grounding_sources = articles
     .filter((a) => Boolean(a.link))
@@ -749,8 +885,6 @@ async function startServer() {
       locationName,
       address,
       coordinates,
-      originName,
-      travelMode,
       nearbyArea,
     } = req.body || {};
 
@@ -794,9 +928,6 @@ async function startServer() {
       coordinates && typeof coordinates.lat === 'number'
         ? ` (Center Coordinates: ${coordinates.lat.toFixed(5)}, ${coordinates.lng.toFixed(5)}, Radius: 200m)`
         : '';
-    const routeContext = originName
-      ? ` The user is requesting a ${travelMode || 'WALKING'} route from "${originName}" to "${targetLabel}".`
-      : '';
 
     const neighborhoodContext =
       surroundingStreets.length > 0 || nearbyPlaceNames.length > 0
@@ -816,7 +947,7 @@ async function startServer() {
             .join('\n')
         : '\n\nNo verified crime articles matched after preprocessing out film shoots, sports metaphors, and out-of-radius stories.';
 
-    const prompt = `Analyze the 200-meter radius crime intelligence around: "${targetLabel}"${coordContext}.${routeContext}${neighborhoodContext}${verifiedFeedContext}
+    const prompt = `Analyze the 200-meter radius crime intelligence around: "${targetLabel}"${coordContext}.${neighborhoodContext}${verifiedFeedContext}
 
 Remember:
 1. Reject any non-crime stories (e.g., movie/film shooting locations like Spider-Man, photo shoots, sports shooting, etc.).
@@ -866,6 +997,20 @@ Return the strict JSON object only.`;
             }
             return false;
           }
+
+          // Incidents Gemini found on its own must pass the same 200m check as feed articles
+          if (findMatchingArticle(item, preprocessed.verifiedArticles)) return true;
+          const zone = verify200mZoneMatch(
+            String(item?.description || ''),
+            locationName || address,
+            surroundingStreets,
+            nearbyPlaceNames,
+            address
+          );
+          if (!zone.matched) {
+            preprocessingAudit.rejected_outside_radius_count++;
+            return false;
+          }
           return true;
         });
 
@@ -885,9 +1030,12 @@ Return the strict JSON object only.`;
 
         // Otherwise score every verified 200m article from its own metadata, plus
         // any additional incidents Gemini found that aren't one of those articles
-        const normalizedIncidents = mergeIncidents(
-          postFilteredIncidents,
-          preprocessed.verifiedArticles,
+        const normalizedIncidents = dedupeIncidents(
+          mergeIncidents(
+            postFilteredIncidents,
+            preprocessed.verifiedArticles,
+            displayLocation
+          ),
           displayLocation
         );
 
@@ -927,12 +1075,13 @@ Return the strict JSON object only.`;
               `200m radius analysis around ${displayLocation} completed across ${surroundingStreets.length} adjacent streets.`
           ),
           incident_breakdown: normalizedIncidents,
-          safety_recommendations: Array.isArray(parsed?.safety_recommendations)
-            ? parsed.safety_recommendations.map(String)
-            : [
-                'Stay on well-lit primary thoroughfares within the 200m zone after dusk.',
-                'Keep valuables out of sight near transit entrances and intersections.',
-              ],
+          safety_recommendations: areVisitorTipsConcise(
+            parsed?.safety_recommendations
+          )
+            ? parsed.safety_recommendations
+                .slice(0, MAX_VISITOR_TIPS)
+                .map((t: string) => t.trim())
+            : buildVisitorTips(normalizedIncidents),
           total_penalty,
           grounding_sources: groundingSources.slice(0, 8),
           preprocessing_audit: preprocessingAudit,

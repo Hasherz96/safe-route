@@ -1,19 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useMapsLibrary } from '@vis.gl/react-google-maps';
-import {
-  Search,
-  LocateFixed,
-  Route,
-  X,
-  Footprints,
-  Car,
-  Bike,
-  TrainFront,
-  Loader2,
-  MapPin,
-  AlertCircle,
-} from 'lucide-react';
-import type { PlaceSelection, TravelModeOption } from '../types/safety';
+import { Search, X, Loader2, MapPin } from 'lucide-react';
+import type { PlaceSelection } from '../types/safety';
 import {
   ENABLE_SRI_LANKA_PROTOTYPE,
   SRI_LANKA_INITIAL_SEARCH_QUERY,
@@ -21,18 +9,8 @@ import {
 } from '../sriLankaPrototype/sriLankaConfig';
 
 interface FloatingSearchOverlayProps {
-  origin: PlaceSelection | null;
   destination: PlaceSelection | null;
-  directionsEnabled: boolean;
-  travelMode: TravelModeOption;
-  gpsStatus: 'idle' | 'locating' | 'granted' | 'denied';
-  gpsErrorMsg: string | null;
   onSelectDestination: (place: PlaceSelection) => void;
-  onSelectOrigin: (place: PlaceSelection) => void;
-  onRequestCurrentLocation: () => void;
-  onToggleDirections: () => void;
-  onChangeTravelMode: (mode: TravelModeOption) => void;
-  onClearRoute: () => void;
   onQuotaExceeded: () => void;
 }
 
@@ -100,45 +78,26 @@ function lookupPredefinedLocation(queryText: string): PlaceSelection | null {
 }
 
 export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
-  origin,
   destination,
-  directionsEnabled,
-  travelMode,
-  gpsStatus,
-  gpsErrorMsg,
   onSelectDestination,
-  onSelectOrigin,
-  onRequestCurrentLocation,
-  onToggleDirections,
-  onChangeTravelMode,
-  onClearRoute,
   onQuotaExceeded,
 }) => {
   const placesLib = useMapsLibrary('places');
 
   const [destQuery, setDestQuery] = useState(destination?.name || '');
-  const [originQuery, setOriginQuery] = useState(origin?.name || '');
-  const [activeField, setActiveField] = useState<'destination' | 'origin' | null>(
-    null
-  );
+  const [isEditing, setIsEditing] = useState(false);
   const [suggestions, setSuggestions] = useState<SuggestionEntry[]>([]);
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
 
   const sessionTokenRef = useRef<any>(null);
   const debounceTimerRef = useRef<number | null>(null);
 
-  // Sync external destination/origin changes to input fields when not actively typing
+  // Sync external destination changes to the input field when not actively typing
   useEffect(() => {
-    if (activeField !== 'destination' && destination) {
+    if (!isEditing && destination) {
       setDestQuery(destination.name);
     }
-  }, [destination, activeField]);
-
-  useEffect(() => {
-    if (activeField !== 'origin' && origin) {
-      setOriginQuery(origin.name);
-    }
-  }, [origin, activeField]);
+  }, [destination, isEditing]);
 
   const ensureSessionToken = useCallback(() => {
     if (!placesLib) return null;
@@ -242,16 +201,9 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
     [placesLib, ensureSessionToken, onQuotaExceeded]
   );
 
-  const handleInputChange = (
-    value: string,
-    field: 'destination' | 'origin'
-  ) => {
-    if (field === 'destination') {
-      setDestQuery(value);
-    } else {
-      setOriginQuery(value);
-    }
-    setActiveField(field);
+  const handleInputChange = (value: string) => {
+    setDestQuery(value);
+    setIsEditing(true);
 
     if (debounceTimerRef.current) {
       window.clearTimeout(debounceTimerRef.current);
@@ -308,11 +260,16 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
     []
   );
 
+  const selectPlace = useCallback(
+    (place: PlaceSelection) => {
+      setDestQuery(place.name);
+      onSelectDestination(place);
+    },
+    [onSelectDestination]
+  );
+
   const resolvePlacePrediction = useCallback(
-    async (
-      entry: SuggestionEntry,
-      targetField: 'destination' | 'origin'
-    ) => {
+    async (entry: SuggestionEntry) => {
       try {
         if (entry.placePrediction) {
           const place = entry.placePrediction.toPlace();
@@ -327,33 +284,18 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
           const lng = typeof loc?.lng === 'function' ? loc.lng() : loc?.lng;
 
           if (typeof lat === 'number' && typeof lng === 'number') {
-            const resolved: PlaceSelection = {
+            selectPlace({
               name: place.displayName || entry.mainText,
               address: place.formattedAddress || entry.secondaryText || entry.mainText,
               location: { lat, lng },
               placeId: entry.placeId,
-            };
-
-            if (targetField === 'destination') {
-              setDestQuery(resolved.name);
-              onSelectDestination(resolved);
-            } else {
-              setOriginQuery(resolved.name);
-              onSelectOrigin(resolved);
-            }
+            });
             return;
           }
         }
 
         // Fallback resolution by query string
-        const fallbackResolved = await resolveQueryToPlace(entry.mainText);
-        if (targetField === 'destination') {
-          setDestQuery(fallbackResolved.name);
-          onSelectDestination(fallbackResolved);
-        } else {
-          setOriginQuery(fallbackResolved.name);
-          onSelectOrigin(fallbackResolved);
-        }
+        selectPlace(await resolveQueryToPlace(entry.mainText));
       } catch (err: any) {
         const msg = String(err?.message || err || '');
         if (
@@ -366,24 +308,17 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
         }
         console.error('Place fetchFields error:', err);
         // Fallback resolve
-        const fallbackResolved = await resolveQueryToPlace(entry.mainText);
-        if (targetField === 'destination') {
-          setDestQuery(fallbackResolved.name);
-          onSelectDestination(fallbackResolved);
-        } else {
-          setOriginQuery(fallbackResolved.name);
-          onSelectOrigin(fallbackResolved);
-        }
+        selectPlace(await resolveQueryToPlace(entry.mainText));
       } finally {
         setSuggestions([]);
-        setActiveField(null);
+        setIsEditing(false);
       }
     },
-    [onSelectDestination, onSelectOrigin, onQuotaExceeded, resolveQueryToPlace]
+    [selectPlace, onQuotaExceeded, resolveQueryToPlace]
   );
 
   const handleExecuteSearch = useCallback(
-    async (queryText: string, targetField: 'destination' | 'origin') => {
+    async (queryText: string) => {
       if (!queryText.trim()) return;
       setIsFetchingSuggestions(true);
       try {
@@ -402,52 +337,35 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
             });
           const first = res?.suggestions?.[0]?.placePrediction;
           if (first) {
-            await resolvePlacePrediction(
-              {
-                placeId: first.placeId || queryText,
-                mainText: first.mainText?.text || queryText,
-                secondaryText: first.secondaryText?.text || '',
-                placePrediction: first,
-              },
-              targetField
-            );
+            await resolvePlacePrediction({
+              placeId: first.placeId || queryText,
+              mainText: first.mainText?.text || queryText,
+              secondaryText: first.secondaryText?.text || '',
+              placePrediction: first,
+            });
             return;
           }
         }
 
         // Direct geocode / predefined location resolution
-        const resolved = await resolveQueryToPlace(queryText);
-        if (targetField === 'destination') {
-          setDestQuery(resolved.name);
-          onSelectDestination(resolved);
-        } else {
-          setOriginQuery(resolved.name);
-          onSelectOrigin(resolved);
-        }
+        selectPlace(await resolveQueryToPlace(queryText));
       } catch (err: any) {
         console.error('Execute search error:', err);
-        const resolved = await resolveQueryToPlace(queryText);
-        if (targetField === 'destination') {
-          setDestQuery(resolved.name);
-          onSelectDestination(resolved);
-        } else {
-          setOriginQuery(resolved.name);
-          onSelectOrigin(resolved);
-        }
+        selectPlace(await resolveQueryToPlace(queryText));
       } finally {
         setIsFetchingSuggestions(false);
         setSuggestions([]);
-        setActiveField(null);
+        setIsEditing(false);
       }
     },
-    [placesLib, ensureSessionToken, resolvePlacePrediction, resolveQueryToPlace, onSelectDestination, onSelectOrigin]
+    [placesLib, ensureSessionToken, resolvePlacePrediction, resolveQueryToPlace, selectPlace]
   );
 
   // Trigger a live lookup for one of the quick search preset buttons
   const handleQuickQuery = useCallback(
     (queryText: string) => {
       setDestQuery(queryText);
-      handleExecuteSearch(queryText, 'destination');
+      handleExecuteSearch(queryText);
     },
     [handleExecuteSearch]
   );
@@ -465,13 +383,6 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
     }
   }, [destination, handleQuickQuery]);
 
-  const travelModes: { id: TravelModeOption; label: string; icon: React.ReactNode }[] = [
-    { id: 'WALKING', label: 'Walk', icon: <Footprints className="w-3.5 h-3.5" /> },
-    { id: 'DRIVING', label: 'Drive', icon: <Car className="w-3.5 h-3.5" /> },
-    { id: 'TRANSIT', label: 'Transit', icon: <TrainFront className="w-3.5 h-3.5" /> },
-    { id: 'BICYCLING', label: 'Bike', icon: <Bike className="w-3.5 h-3.5" /> },
-  ];
-
   return (
     <div className="absolute top-3 left-3 right-3 z-30 flex flex-col gap-2 pointer-events-none">
       {/* Main Material Floating Search Card */}
@@ -480,7 +391,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            handleExecuteSearch(destQuery, 'destination');
+            handleExecuteSearch(destQuery);
           }}
           className="flex items-center gap-1.5"
         >
@@ -495,12 +406,12 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
             <input
               type="text"
               value={destQuery}
-              onFocus={() => setActiveField('destination')}
-              onChange={(e) => handleInputChange(e.target.value, 'destination')}
+              onFocus={() => setIsEditing(true)}
+              onChange={(e) => handleInputChange(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
-                  handleExecuteSearch(destQuery, 'destination');
+                  handleExecuteSearch(destQuery);
                 }
               }}
               placeholder={
@@ -511,7 +422,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
               className="w-full bg-transparent text-sm text-slate-100 placeholder-slate-500 focus:outline-none truncate"
               aria-label="Search destination"
             />
-            {isFetchingSuggestions && activeField === 'destination' && (
+            {isFetchingSuggestions && isEditing && (
               <Loader2 className="w-4 h-4 text-emerald-400 animate-spin shrink-0 ml-1.5" />
             )}
             {destQuery && (
@@ -520,7 +431,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
                 onClick={() => {
                   setDestQuery('');
                   setSuggestions([]);
-                  setActiveField('destination');
+                  setIsEditing(true);
                 }}
                 aria-label="Clear destination search"
                 className="min-w-[36px] min-h-[36px] -mr-1 flex items-center justify-center text-slate-400 hover:text-slate-200"
@@ -529,152 +440,31 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
               </button>
             )}
           </div>
-
-          {/* Current Location GPS Pickup Button */}
-          <button
-            type="button"
-            onClick={onRequestCurrentLocation}
-            title="Use Current Android GPS Location"
-            className={`min-w-[44px] min-h-[44px] rounded-xl border flex items-center justify-center transition-colors shrink-0 ${
-              gpsStatus === 'granted'
-                ? 'bg-sky-500/15 border-sky-500/50 text-sky-300'
-                : gpsStatus === 'denied'
-                  ? 'bg-rose-500/15 border-rose-500/50 text-rose-300'
-                  : 'bg-slate-800/90 border-slate-700/80 text-slate-300 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            {gpsStatus === 'locating' ? (
-              <Loader2 className="w-4 h-4 animate-spin text-sky-400" />
-            ) : (
-              <LocateFixed className="w-4 h-4" />
-            )}
-          </button>
-
-          {/* Get Directions Toggle Button */}
-          <button
-            type="button"
-            onClick={onToggleDirections}
-            title="Toggle Turn-by-Turn Directions"
-            className={`min-h-[44px] px-3 rounded-xl border flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
-              directionsEnabled
-                ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-md shadow-emerald-500/20'
-                : 'bg-slate-800/90 border-slate-700/80 text-slate-200 hover:bg-slate-800'
-            }`}
-          >
-            <Route className="w-4 h-4" />
-            <span className="hidden sm:inline">Directions</span>
-          </button>
         </form>
 
-        {/* Expanded Origin & Travel Mode Drawer when Directions Enabled */}
-        {directionsEnabled && (
-          <div className="mt-2 pt-2 border-t border-slate-800/80 flex flex-col gap-2">
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleExecuteSearch(originQuery, 'origin');
-              }}
-              className="flex items-center gap-1.5"
-            >
-              <div className="relative flex-1 flex items-center bg-slate-950/90 border border-slate-800 rounded-xl px-3 min-h-[44px] focus-within:border-sky-500/70 transition-colors">
-                <LocateFixed className="w-3.5 h-3.5 text-sky-400 shrink-0 mr-2.5" />
-                <input
-                  type="text"
-                  value={originQuery}
-                  onFocus={() => setActiveField('origin')}
-                  onChange={(e) => handleInputChange(e.target.value, 'origin')}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleExecuteSearch(originQuery, 'origin');
-                    }
-                  }}
-                  placeholder="Start location (or tap GPS icon)..."
-                  className="w-full bg-transparent text-xs text-slate-100 placeholder-slate-500 focus:outline-none truncate"
-                  aria-label="Starting location"
-                />
-                {originQuery && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOriginQuery('');
-                      setSuggestions([]);
-                      setActiveField('origin');
-                    }}
-                    aria-label="Clear origin search"
-                    className="min-w-[32px] min-h-[32px] -mr-1 flex items-center justify-center text-slate-400 hover:text-slate-200"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={onClearRoute}
-                className="min-h-[44px] px-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-xs text-slate-300 whitespace-nowrap"
-              >
-                Close
-              </button>
-            </form>
-
-            {/* Segmented Travel Mode Selector (Interactive Filter Controls) */}
-            <div className="grid grid-cols-4 gap-1 p-1 bg-slate-950/90 rounded-xl border border-slate-800/80">
-              {travelModes.map((m) => {
-                const active = travelMode === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => onChangeTravelMode(m.id)}
-                    className={`min-h-[36px] rounded-lg flex items-center justify-center gap-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                      active
-                        ? 'bg-slate-800 text-emerald-300 shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {m.icon}
-                    <span>{m.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         {/* Quick Destination Search Buttons */}
-        {!directionsEnabled && (
-          <div className="mt-2 flex items-center gap-1.5 overflow-x-auto custom-scrollbar pt-0.5 pb-1.5">
-            {QUICK_SEARCH_QUERIES.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                onClick={() => handleQuickQuery(preset.query)}
-                className="min-h-[32px] px-2.5 py-1 rounded-lg bg-slate-950/90 hover:bg-slate-800 border border-slate-800/90 text-[11px] font-medium text-slate-300 hover:text-white whitespace-nowrap shrink-0 transition-colors"
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Android Geolocation Permission Denied / Notice Banner */}
-        {gpsErrorMsg && (
-          <div className="mt-2 px-3 py-2 rounded-xl bg-amber-950/70 border border-amber-500/40 flex items-start gap-2 text-xs text-amber-200">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <div className="flex-1 leading-snug">{gpsErrorMsg}</div>
-          </div>
-        )}
+        <div className="mt-2 flex items-center gap-1.5 overflow-x-auto custom-scrollbar pt-0.5 pb-1.5">
+          {QUICK_SEARCH_QUERIES.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              onClick={() => handleQuickQuery(preset.query)}
+              className="min-h-[32px] px-2.5 py-1 rounded-lg bg-slate-950/90 hover:bg-slate-800 border border-slate-800/90 text-[11px] font-medium text-slate-300 hover:text-white whitespace-nowrap shrink-0 transition-colors"
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Places Autocomplete Predictions Dropdown */}
-      {activeField && suggestions.length > 0 && (
+      {isEditing && suggestions.length > 0 && (
         <div className="pointer-events-auto rounded-2xl bg-slate-900/95 backdrop-blur-md border border-slate-800 shadow-2xl overflow-hidden divide-y divide-slate-800/70">
           {suggestions.map((item) => (
             <button
               key={item.placeId}
               type="button"
-              onClick={() => resolvePlacePrediction(item, activeField)}
+              onClick={() => resolvePlacePrediction(item)}
               className="w-full min-h-[52px] px-3.5 py-2.5 flex items-center gap-3 text-left hover:bg-slate-800/80 transition-colors"
             >
               <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center shrink-0">
