@@ -1,0 +1,13 @@
+# Keep secrets and local artifacts out of the image and build context
+.env
+.env.*
+!.env.example
+node_modules
+dist
+build
+coverage
+*.log
+.git
+.antigravity
+.vscode
+.claude

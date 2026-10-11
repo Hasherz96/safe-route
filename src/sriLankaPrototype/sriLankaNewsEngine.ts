@@ -16,6 +16,7 @@ import {
   SRI_LANKA_LOCALITY_TRANSLITERATIONS,
   type NationalNewsOutlet,
 } from './sriLankaConfig';
+import { describeFetchError, logFetch } from '../fetchLog';
 
 /**
  * Matches an article's source name, URL, or headline suffix against the 13
@@ -55,6 +56,7 @@ export async function fetchDirectSriLankaRssFeeds(): Promise<
 
   const fetchPromises = SRI_LANKA_NATIONAL_OUTLETS.filter((o) => Boolean(o.rssUrl)).map(
     async (outlet) => {
+      const startedAt = Date.now();
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 3500);
@@ -67,9 +69,17 @@ export async function fetchDirectSriLankaRssFeeds(): Promise<
         });
         clearTimeout(timeout);
 
-        if (!res.ok) return;
-        const xml = await res.text();
+        const xml = res.ok ? await res.text() : '';
         const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+        logFetch({
+          source: 'outlet_feed',
+          outlet: outlet.displayName,
+          ok: res.ok,
+          ms: Date.now() - startedAt,
+          status: res.status,
+          items: itemMatches.length,
+        });
+        if (!res.ok) return;
 
         for (const m of itemMatches.slice(0, 20)) {
           const block = m[1];
@@ -94,8 +104,15 @@ export async function fetchDirectSriLankaRssFeeds(): Promise<
             });
           }
         }
-      } catch {
-        // Silently skip individual direct RSS feed errors/timeouts
+      } catch (err) {
+        // One outlet failing shouldn't stop the others
+        logFetch({
+          source: 'outlet_feed',
+          outlet: outlet.displayName,
+          ok: false,
+          ms: Date.now() - startedAt,
+          error: describeFetchError(err),
+        });
       }
     }
   );
