@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import {
-  Smartphone,
-  Maximize2,
-  Code2,
   Wifi,
   BatteryCharging,
   ChevronLeft,
@@ -46,9 +43,6 @@ export default function App() {
 
 function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
   const [quotaExceeded, setQuotaExceeded] = useState(false);
-  const [viewportMode, setViewportMode] = useState<'device' | 'fullscreen'>(
-    'device'
-  );
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
 
   const [destination, setDestination] = useState<PlaceSelection | null>(null);
@@ -168,8 +162,7 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
           </div>
         )}
 
-        {/* Strict 3-Zone Top Bar Contract */}
-        <header className="flex items-center justify-between px-5 py-3 border-b border-slate-200/80 bg-slate-50/95 shrink-0 z-40">
+        <header className="flex items-center justify-center px-5 py-3 border-b border-slate-200/80 bg-slate-50/95 shrink-0 z-40">
           <a
             href="#top"
             onClick={(e) => {
@@ -180,81 +173,11 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
           >
             BeSafe Android
           </a>
-
-          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-500">
-            <a
-              href="#map"
-              onClick={(e) => {
-                e.preventDefault();
-                setSheetExpanded(false);
-              }}
-              className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-            >
-              200m Map
-            </a>
-            <a
-              href="#intelligence"
-              onClick={(e) => {
-                e.preventDefault();
-                setSheetExpanded(true);
-              }}
-              className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-            >
-              Crime Sheet
-            </a>
-            <a
-              href="#source"
-              onClick={(e) => {
-                e.preventDefault();
-                setIsSourceModalOpen(true);
-              }}
-              className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-            >
-              Expo Manifest
-            </a>
-          </nav>
-
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={() =>
-                setViewportMode((prev) =>
-                  prev === 'device' ? 'fullscreen' : 'device'
-                )
-              }
-              className="hidden sm:inline-flex min-h-[38px] px-3.5 py-1.5 text-xs font-medium text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
-            >
-              {viewportMode === 'device' ? (
-                <>
-                  <Maximize2 className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Full Canvas</span>
-                </>
-              ) : (
-                <>
-                  <Smartphone className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Android Frame</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsSourceModalOpen(true)}
-              className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-emerald-600 hover:bg-emerald-700 rounded-lg inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
-            >
-              <Code2 className="w-3.5 h-3.5" />
-              <span>Native Code</span>
-            </button>
-          </div>
         </header>
 
         <main className="flex-1 relative flex items-center justify-center overflow-hidden bg-slate-50 p-0 sm:p-4">
           <div
-            className={`relative flex flex-col bg-slate-50 overflow-hidden transition-all duration-200 ${
-              viewportMode === 'device'
-                ? 'w-full h-full sm:w-[420px] sm:h-[840px] sm:max-h-full sm:rounded-[38px] sm:border-[6px] sm:border-slate-200 sm:shadow-[0_25px_70px_rgba(15,23,42,0.18)]'
-                : 'w-full h-full rounded-none sm:rounded-2xl sm:border sm:border-slate-200'
-            }`}
+            className="relative flex flex-col bg-slate-50 overflow-hidden w-full h-full sm:w-[420px] sm:h-[840px] sm:max-h-full sm:rounded-[38px] sm:border-[6px] sm:border-slate-200 sm:shadow-[0_25px_70px_rgba(15,23,42,0.18)]"
           >
             {/* Translucent Android Status Bar */}
             <div className="h-7 px-5 bg-slate-50/90 backdrop-blur-md flex items-center justify-between text-[11px] font-mono-tabular text-slate-700 shrink-0 z-40 border-b border-slate-200">
