@@ -20,10 +20,30 @@ import type {
   NearbyAreaContext,
 } from './types/safety';
 
-const GOOGLE_MAPS_API_KEY =
-  import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+// Built into the bundle in local development; in a deployed container the
+// server provides it at runtime from /api/config instead
+const BUILD_TIME_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 
 export default function App() {
+  const [mapsApiKey, setMapsApiKey] = useState<string | null>(
+    BUILD_TIME_MAPS_API_KEY || null
+  );
+
+  useEffect(() => {
+    if (mapsApiKey !== null) return;
+    fetch('/api/config')
+      .then((res): Promise<{ googleMapsApiKey?: string }> => (res.ok ? res.json() : Promise.resolve({})))
+      .then((config) => setMapsApiKey(config.googleMapsApiKey || ''))
+      .catch(() => setMapsApiKey(''));
+  }, [mapsApiKey]);
+
+  if (mapsApiKey === null) {
+    return <div className="h-screen w-screen bg-slate-950" aria-busy="true" />;
+  }
+  return <SafeRouteApp mapsApiKey={mapsApiKey} />;
+}
+
+function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
   const [quotaExceeded, setQuotaExceeded] = useState(false);
   const [viewportMode, setViewportMode] = useState<'device' | 'fullscreen'>(
     'device'
@@ -116,7 +136,7 @@ export default function App() {
 
   return (
     <APIProvider
-      apiKey={GOOGLE_MAPS_API_KEY}
+      apiKey={mapsApiKey}
       libraries={['places', 'marker']}
     >
       <div className="h-screen w-screen overflow-hidden flex flex-col bg-slate-950 text-slate-100">

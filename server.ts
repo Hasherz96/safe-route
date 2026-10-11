@@ -22,6 +22,7 @@ import {
   findIncidentDateInText,
   isPlausibleIncidentDate,
 } from './src/articleDates';
+import { describeFetchError, logFetch } from './src/fetchLog';
 import {
   areVisitorTipsConcise,
   MAX_VISITOR_TIPS,
@@ -385,6 +386,7 @@ async function fetchAndPreprocess200mCrimeReports(
 
   for (const queryStr of queries) {
     if (verifiedArticles.length >= 10) break;
+    const startedAt = Date.now();
     try {
       const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
         queryStr
@@ -400,9 +402,32 @@ async function fetchAndPreprocess200mCrimeReports(
       });
       clearTimeout(timeout);
 
+      if (!res.ok) {
+        logFetch({
+          source: 'google_news',
+          ok: false,
+          ms: Date.now() - startedAt,
+          status: res.status,
+          finalUrl: res.url.slice(0, 120),
+          query: queryStr.slice(0, 80),
+        });
+      }
+
       if (res.ok) {
         const xml = await res.text();
         const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+        logFetch({
+          source: 'google_news',
+          ok: true,
+          ms: Date.now() - startedAt,
+          status: res.status,
+          items: itemMatches.length,
+          query: queryStr.slice(0, 80),
+          // A consent or "unusual traffic" page comes back as 200 with no items
+          ...(itemMatches.length === 0
+            ? { finalUrl: res.url.slice(0, 120), bodyStart: xml.slice(0, 160) }
+            : {}),
+        });
         for (const m of itemMatches) {
           const block = m[1];
           const rawTitle = (
@@ -511,12 +536,20 @@ async function fetchAndPreprocess200mCrimeReports(
           if (verifiedArticles.length >= 10) break;
         }
       }
-    } catch {
-      // Ignore individual RSS timeout
+    } catch (err) {
+      // A failed query shouldn't stop the others
+      logFetch({
+        source: 'google_news',
+        ok: false,
+        ms: Date.now() - startedAt,
+        error: describeFetchError(err),
+        query: queryStr.slice(0, 80),
+      });
     }
   }
 
   // Also check Reddit community reports for the 200m zone
+  const redditStartedAt = Date.now();
   try {
     const redditUrl = `https://www.reddit.com/search.json?q=${encodeURIComponent(
       `"${primaryPlace}" (shooting OR robbery OR mugging OR break in OR assault)`
@@ -530,6 +563,12 @@ async function fetchAndPreprocess200mCrimeReports(
       },
     });
     clearTimeout(timeout);
+    logFetch({
+      source: 'reddit',
+      ok: res.ok,
+      ms: Date.now() - redditStartedAt,
+      status: res.status,
+    });
 
     if (res.ok) {
       const data: any = await res.json();
@@ -598,8 +637,13 @@ async function fetchAndPreprocess200mCrimeReports(
         });
       }
     }
-  } catch {
-    // Ignore Reddit timeout
+  } catch (err) {
+    logFetch({
+      source: 'reddit',
+      ok: false,
+      ms: Date.now() - redditStartedAt,
+      error: describeFetchError(err),
+    });
   }
 
   // Recency is about when the crime happened, not when it was reported
@@ -663,6 +707,7 @@ ${JSON.stringify(
 )}`;
 
   for (const model of ['gemini-3.1-flash-lite', 'gemini-flash-latest']) {
+    const startedAt = Date.now();
     try {
       const response = await withTimeout(
         ai.models.generateContent({
@@ -679,8 +724,16 @@ ${JSON.stringify(
         if (item && isPlausibleIncidentDate(day, item.published)) dates.set(item.id, day);
       }
       return dates;
-    } catch {
+    } catch (err: any) {
       // Try the next model; if none respond, callers use the rule-based fallback
+      logFetch({
+        source: 'gemini_dates',
+        model,
+        ok: false,
+        ms: Date.now() - startedAt,
+        status: err?.status,
+        error: describeFetchError(err),
+      });
     }
   }
   return dates;
@@ -810,9 +863,20 @@ function extractJsonObject(rawText: string): any {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  // Cloud Run and similar hosts choose the port through $PORT
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
+
+  // Browser config that a deployed container provides at runtime rather than
+  // baking into the build. The Maps key is public by design; restrict it to the
+  // app's domain in Google Cloud Console.
+  app.get('/api/config', (_req, res) => {
+    res.json({
+      googleMapsApiKey:
+        process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || '',
+    });
+  });
 
   app.all('/api/test/grounding', async (req, res) => {
     const location =
@@ -906,11 +970,28 @@ async function startServer() {
       : [];
 
     // Step 1 & 2: Fetch candidate articles for the 200m neighborhood & run the Preprocessor
+    const preprocessStartedAt = Date.now();
     const preprocessed = await fetchAndPreprocess200mCrimeReports(
       locationName || address,
       address,
       surroundingStreets,
       nearbyPlaceNames
+    );
+    // One line per search summarising what each filter stage kept
+    console.log(
+      JSON.stringify({
+        severity: 'INFO',
+        event: 'crime_scan_summary',
+        place: String(locationName || address).slice(0, 80),
+        ms: Date.now() - preprocessStartedAt,
+        streetsFromMaps: surroundingStreets.length,
+        placesFromMaps: nearbyPlaceNames.length,
+        scanned: preprocessed.rawCount,
+        rejectedNonCrime: preprocessed.rejectedNonCrimeCount,
+        rejectedOutsideRadius: preprocessed.rejectedOutsideRadiusCount,
+        rejectedTooOld: preprocessed.rejectedTooOldCount,
+        verified: preprocessed.verifiedArticles.length,
+      })
     );
 
     const preprocessingAudit = {
@@ -962,6 +1043,7 @@ Return the strict JSON object only.`;
     ];
 
     for (const modelName of candidateModels) {
+      const startedAt = Date.now();
       try {
         const response = await ai.models.generateContent({
           model: modelName,
@@ -1093,9 +1175,14 @@ Return the strict JSON object only.`;
         });
         return;
       } catch (err: any) {
-        console.warn(
-          `Model ${modelName} attempt failed (${err?.status || err?.message || 'error'}), trying next...`
-        );
+        logFetch({
+          source: 'gemini_analysis',
+          model: modelName,
+          ok: false,
+          ms: Date.now() - startedAt,
+          status: err?.status,
+          error: describeFetchError(err),
+        });
       }
     }
 

@@ -7,6 +7,8 @@
  * fetch its text.
  */
 
+import { describeFetchError, logFetch } from './fetchLog';
+
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36';
 
@@ -253,14 +255,33 @@ export async function fetchArticleDetails(link: string): Promise<ArticleDetails>
   if (cached) return cached;
 
   let details: ArticleDetails = { url: link, text: '' };
+  const startedAt = Date.now();
+  const isGoogleNews = GOOGLE_NEWS_ARTICLE_REGEX.test(link);
   try {
-    const url = GOOGLE_NEWS_ARTICLE_REGEX.test(link) ? await decodeGoogleNewsUrl(link) : link;
+    const url = isGoogleNews ? await decodeGoogleNewsUrl(link) : link;
     if (url) {
       const res = await fetchWithTimeout(url);
       details = { url, text: res.ok ? extractArticleText(await res.text()) : '' };
+      logFetch({
+        source: 'article_page',
+        ok: res.ok && details.text.length > 0,
+        ms: Date.now() - startedAt,
+        status: res.status,
+        host: new URL(url).host,
+        textChars: details.text.length,
+      });
+    } else {
+      logFetch({ source: 'article_page', ok: false, ms: Date.now() - startedAt, error: 'google_news_decode_failed' });
     }
-  } catch {
+  } catch (err) {
     // Timeouts and blocked pages leave the text empty; callers fall back to the publish date
+    logFetch({
+      source: 'article_page',
+      ok: false,
+      ms: Date.now() - startedAt,
+      error: describeFetchError(err),
+      googleNews: isGoogleNews,
+    });
     return details;
   }
 
