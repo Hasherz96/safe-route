@@ -82,4 +82,6 @@ export interface PlaceSelection {
   address: string;
   location: Coordinates;
   placeId?: string;
+  /** Google place types, e.g. "locality" for a town. */
+  types?: string[];
 }

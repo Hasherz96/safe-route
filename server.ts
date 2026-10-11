@@ -23,6 +23,7 @@ import {
   isPlausibleIncidentDate,
 } from './src/articleDates';
 import { describeFetchError, logFetch } from './src/fetchLog';
+import { isTooLargeToScore } from './src/placeScope';
 import {
   areVisitorTipsConcise,
   MAX_VISITOR_TIPS,
@@ -950,10 +951,21 @@ async function startServer() {
       address,
       coordinates,
       nearbyArea,
+      types,
     } = req.body || {};
 
     if (!locationName && !address) {
       res.status(400).json({ error: 'locationName or address is required.' });
+      return;
+    }
+
+    // Scores describe 200m around a specific spot; neighbourhoods, towns and
+    // larger areas are too large to rate
+    if (isTooLargeToScore(Array.isArray(types) ? types.map(String) : [])) {
+      res.status(422).json({
+        error: 'too_large',
+        message: 'This area is too large to rate. Search for a specific street, landmark or address.',
+      });
       return;
     }
 

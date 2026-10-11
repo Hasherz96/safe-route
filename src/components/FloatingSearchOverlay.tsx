@@ -32,14 +32,23 @@ const QUICK_SEARCH_QUERIES = ENABLE_SRI_LANKA_PROTOTYPE
   ? SRI_LANKA_QUICK_SEARCH_PRESETS
   : GLOBAL_QUICK_SEARCH_QUERIES;
 
-const PREDEFINED_LOCATIONS: { [key: string]: { lat: number; lng: number; name: string; address: string } } = {
-  'pettah': { lat: 6.9344, lng: 79.8528, name: 'Pettah, Colombo', address: 'Pettah, Colombo 01100, Sri Lanka' },
-  'dehiwala': { lat: 6.8511, lng: 79.8660, name: 'Dehiwala, Colombo', address: 'Dehiwala-Mount Lavinia, Sri Lanka' },
-  'bambalapitiya': { lat: 6.8920, lng: 79.8552, name: 'Bambalapitiya, Colombo', address: 'Bambalapitiya, Colombo 00400, Sri Lanka' },
+const PREDEFINED_LOCATIONS: {
+  [key: string]: { lat: number; lng: number; name: string; address: string; types?: string[] };
+} = {
+  // Specific spots come first: the lookup takes the first key found in the query
+  'central bus stand': { lat: 6.9338, lng: 79.8556, name: 'Central Bus Stand, Pettah', address: 'Central Bus Stand, Olcott Mawatha, Pettah, Colombo, Sri Lanka' },
+  'galle face green': { lat: 6.9255, lng: 79.8452, name: 'Galle Face Green', address: 'Galle Face Green, Colombo 00300, Sri Lanka' },
+  'zoological': { lat: 6.8566, lng: 79.8741, name: 'National Zoological Gardens', address: 'National Zoological Gardens, Dehiwala-Mount Lavinia, Sri Lanka' },
+  'majestic city': { lat: 6.8936, lng: 79.8553, name: 'Majestic City', address: 'Majestic City, Galle Road, Bambalapitiya, Colombo, Sri Lanka' },
+  'lighthouse': { lat: 6.0247, lng: 80.2194, name: 'Galle Fort Lighthouse', address: 'Galle Fort Lighthouse, Galle, Sri Lanka' },
+  // Neighbourhoods and towns are too large to score
+  'pettah': { lat: 6.9344, lng: 79.8528, name: 'Pettah, Colombo', address: 'Pettah, Colombo 01100, Sri Lanka', types: ['sublocality'] },
+  'dehiwala': { lat: 6.8511, lng: 79.8660, name: 'Dehiwala, Colombo', address: 'Dehiwala-Mount Lavinia, Sri Lanka', types: ['locality'] },
+  'bambalapitiya': { lat: 6.8920, lng: 79.8552, name: 'Bambalapitiya, Colombo', address: 'Bambalapitiya, Colombo 00400, Sri Lanka', types: ['sublocality'] },
   'fort': { lat: 6.9342, lng: 79.8503, name: 'Colombo Fort Railway Station', address: 'Colombo Fort Railway Station, Olcott Mawatha, Colombo, Sri Lanka' },
   'kandy': { lat: 7.2906, lng: 80.6337, name: 'Kandy City Centre', address: 'Kandy City Centre, Sri Dalada Veediya, Kandy, Sri Lanka' },
   'galle': { lat: 6.0268, lng: 80.2170, name: 'Galle Fort', address: 'Galle Fort, Galle, Sri Lanka' },
-  'colombo': { lat: 6.9271, lng: 79.8612, name: 'Colombo', address: 'Colombo, Western Province, Sri Lanka' },
+  'colombo': { lat: 6.9271, lng: 79.8612, name: 'Colombo', address: 'Colombo, Western Province, Sri Lanka', types: ['locality'] },
   'union square': { lat: 37.7879, lng: -122.4074, name: 'Union Square', address: 'Union Square, San Francisco, CA, USA' },
   'times square': { lat: 40.7580, lng: -73.9855, name: 'Times Square', address: 'Times Square, New York, NY, USA' },
   'millennium park': { lat: 41.8826, lng: -87.6226, name: 'Millennium Park', address: 'Millennium Park, Chicago, IL, USA' },
@@ -55,6 +64,7 @@ function lookupPredefinedLocation(queryText: string): PlaceSelection | null {
         address: val.address,
         location: { lat: val.lat, lng: val.lng },
         placeId: `predef-${key}`,
+        types: val.types,
       };
     }
   }
@@ -245,6 +255,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
                 address: geocodeRes.formatted_address || queryText,
                 location: { lat, lng },
                 placeId: geocodeRes.place_id,
+                types: Array.isArray(geocodeRes.types) ? geocodeRes.types : undefined,
               };
             }
           }
@@ -274,7 +285,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
         if (entry.placePrediction) {
           const place = entry.placePrediction.toPlace();
           await place.fetchFields({
-            fields: ['displayName', 'formattedAddress', 'location', 'viewport'],
+            fields: ['displayName', 'formattedAddress', 'location', 'viewport', 'types'],
           });
 
           sessionTokenRef.current = null;
@@ -289,6 +300,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
               address: place.formattedAddress || entry.secondaryText || entry.mainText,
               location: { lat, lng },
               placeId: entry.placeId,
+              types: Array.isArray(place.types) ? place.types : undefined,
             });
             return;
           }
@@ -370,10 +382,11 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
     [handleExecuteSearch]
   );
 
-  // Auto-load initial destination upon load
+  // Auto-load initial destination upon load, once Places has loaded so the
+  // search resolves through Google rather than the offline fallback list
   const didInitRef = useRef(false);
   useEffect(() => {
-    if (!destination && !didInitRef.current) {
+    if (!destination && !didInitRef.current && placesLib) {
       didInitRef.current = true;
       handleQuickQuery(
         ENABLE_SRI_LANKA_PROTOTYPE
@@ -381,7 +394,7 @@ export const FloatingSearchOverlay: React.FC<FloatingSearchOverlayProps> = ({
           : 'Union Square San Francisco CA'
       );
     }
-  }, [destination, handleQuickQuery]);
+  }, [destination, handleQuickQuery, placesLib]);
 
   return (
     <div className="absolute top-3 left-3 right-3 z-30 flex flex-col gap-2 pointer-events-none">

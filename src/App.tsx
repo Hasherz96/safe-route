@@ -14,6 +14,7 @@ import { SafetyMapCanvas } from './components/SafetyMapCanvas';
 import { FloatingSearchOverlay } from './components/FloatingSearchOverlay';
 import { SafetyBottomSheet } from './components/SafetyBottomSheet';
 import { AndroidSourceModal } from './components/AndroidSourceModal';
+import { isTooLargeToScore } from './placeScope';
 import type {
   PlaceSelection,
   SafetyAnalysisResponse,
@@ -82,6 +83,7 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
             address: target.address,
             coordinates: target.location,
             nearbyArea: areaContext || nearbyArea,
+            types: target.types,
           }),
         });
         if (!res.ok) {
@@ -98,11 +100,19 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
     [nearbyArea]
   );
 
-  // When user selects a destination, we set destination; SafetyMapCanvas then scans the 200m radius via Google Maps Place.searchNearby and calls handleNearbyAreaDiscovered
+  // When user selects a destination, we set destination; SafetyMapCanvas then scans the 200m radius via Google Maps Place.searchNearby and calls handleNearbyAreaDiscovered.
+  // Neighbourhoods, towns and larger areas aren't scored: the sheet asks for a more specific place.
   const handleSelectDestination = useCallback((place: PlaceSelection) => {
+    const tooLarge = isTooLargeToScore(place.types);
     setDestination(place);
-    setIsAnalyzing(true);
+    setIsAnalyzing(!tooLarge);
+    if (tooLarge) {
+      setSafetyData(null);
+      setSheetExpanded(false);
+    }
   }, []);
+
+  const destinationTooLarge = isTooLargeToScore(destination?.types);
 
   const handleNearbyAreaDiscovered = useCallback(
     (target: PlaceSelection, discoveredArea: NearbyAreaContext) => {
@@ -269,6 +279,7 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
 
               <SafetyMapCanvas
                 destination={destination}
+                destinationTooLarge={destinationTooLarge}
                 safetyData={safetyData}
                 isAnalyzing={isAnalyzing}
                 onNearbyAreaDiscovered={handleNearbyAreaDiscovered}
@@ -284,6 +295,7 @@ function SafeRouteApp({ mapsApiKey }: { mapsApiKey: string }) {
                   )
                 }
                 destination={destination}
+                destinationTooLarge={destinationTooLarge}
                 safetyData={safetyData}
                 isAnalyzing={isAnalyzing}
               />
