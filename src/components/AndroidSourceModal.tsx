@@ -256,13 +256,13 @@ export const AndroidSourceModal: React.FC<AndroidSourceModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-3xl max-h-[85vh] rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-white/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="w-full max-w-3xl max-h-[85vh] rounded-2xl bg-white border border-slate-200 shadow-2xl flex flex-col overflow-hidden">
         {/* Modal Header */}
-        <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between gap-4">
+        <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
-            <Smartphone className="w-4 h-4 text-emerald-400" />
-            <h2 className="text-sm font-semibold text-slate-100">
+            <Smartphone className="w-4 h-4 text-emerald-600" />
+            <h2 className="text-sm font-semibold text-slate-900">
               Expo React Native Android Source & Manifest
             </h2>
           </div>
@@ -270,7 +270,7 @@ export const AndroidSourceModal: React.FC<AndroidSourceModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="min-w-[36px] min-h-[36px] rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center transition-colors"
+            className="min-w-[36px] min-h-[36px] rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 flex items-center justify-center transition-colors"
             aria-label="Close source modal"
           >
             <X className="w-4 h-4" />
@@ -278,15 +278,15 @@ export const AndroidSourceModal: React.FC<AndroidSourceModalProps> = ({
         </div>
 
         {/* File Tabs + Copy Action */}
-        <div className="px-5 py-2.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between gap-2">
+        <div className="px-5 py-2.5 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => setSelectedFile('SafeRouteAndroid.tsx')}
               className={`min-h-[34px] px-3 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
                 selectedFile === 'SafeRouteAndroid.tsx'
-                  ? 'bg-slate-800 text-emerald-300'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-slate-100 text-emerald-700'
+                  : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <FileCode2 className="w-3.5 h-3.5" />
@@ -297,8 +297,8 @@ export const AndroidSourceModal: React.FC<AndroidSourceModalProps> = ({
               onClick={() => setSelectedFile('app.json')}
               className={`min-h-[34px] px-3 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
                 selectedFile === 'app.json'
-                  ? 'bg-slate-800 text-emerald-300'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-slate-100 text-emerald-700'
+                  : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <FileCode2 className="w-3.5 h-3.5" />
@@ -309,11 +309,11 @@ export const AndroidSourceModal: React.FC<AndroidSourceModalProps> = ({
           <button
             type="button"
             onClick={handleCopy}
-            className="min-h-[34px] px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 flex items-center gap-1.5 transition-colors"
+            className="min-h-[34px] px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-medium text-slate-800 flex items-center gap-1.5 transition-colors"
           >
             {copied ? (
               <>
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
                 <span>Copied</span>
               </>
             ) : (
@@ -326,7 +326,7 @@ export const AndroidSourceModal: React.FC<AndroidSourceModalProps> = ({
         </div>
 
         {/* Code Content */}
-        <pre className="flex-1 p-5 overflow-auto custom-scrollbar bg-slate-950 text-xs font-mono-tabular text-slate-300 leading-relaxed">
+        <pre className="flex-1 p-5 overflow-auto custom-scrollbar bg-slate-50 text-xs font-mono-tabular text-slate-700 leading-relaxed">
           <code>{activeCode}</code>
         </pre>
       </div>
